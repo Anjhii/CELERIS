@@ -35,21 +35,23 @@ namespace Celeris.Config
         public int proceduralSeed = 0;
 
         [Header("Pesos de segmentos (probabilidad relativa)")]
-        public int weightArrow     = 3;
-        public int weightLaser     = 2;
-        public int weightResonance = 2;
-        public int weightCharge    = 1;
+        [Tooltip("Segmentos con ArrowTile central")]
+        public int weightArrow  = 3;
+        [Tooltip("Segmentos con LaserTile central (desactivable con pulso)")]
+        public int weightLaser  = 2;
+        [Tooltip("Segmentos con ChargeTile central (Stress Test)")]
+        public int weightCharge = 1;
+        // ResonanceTile eliminado en v2: la desactivación de láseres
+        // es ahora una habilidad del jugador con cooldown global.
 
-        // ── Helper: devuelve un tipo de segmento aleatorio
-        //    según pesos, usando la semilla del config ────────
+        // ── Helper: devuelve un tipo de segmento aleatorio ────
         public SegmentType GetWeightedRandomSegment(System.Random rng)
         {
-            int total = weightArrow + weightLaser + weightResonance + weightCharge;
+            int total = weightArrow + weightLaser + weightCharge;
             int roll  = rng.Next(0, total);
 
-            if (roll < weightArrow)                              return SegmentType.Arrow;
-            if (roll < weightArrow + weightLaser)               return SegmentType.Laser;
-            if (roll < weightArrow + weightLaser + weightResonance) return SegmentType.Resonance;
+            if (roll < weightArrow)               return SegmentType.Arrow;
+            if (roll < weightArrow + weightLaser) return SegmentType.Laser;
             return SegmentType.Charge;
         }
     }

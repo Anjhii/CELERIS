@@ -21,7 +21,7 @@ namespace Celeris.Grid
         public MoveDirection arrowDirection = MoveDirection.North;
 
         [Header("Estado interactivo")]
-        public bool isActive = true;   // Laser / Resonance ON-OFF
+        public bool isActive = true;   // Laser ON-OFF (Resonance eliminada en v2)
 
         // Coordenada lógica en el grid (asignada por el generador)
         [HideInInspector] public Vector2Int gridCoord;
@@ -63,14 +63,6 @@ namespace Celeris.Grid
         public void ToggleLaser()
         {
             if (tileType != TileType.LaserTile) return;
-            isActive = !isActive;
-            ApplyVisual();
-        }
-
-        /// <summary>Alterna estado ON/OFF de Resonance.</summary>
-        public void ToggleResonance()
-        {
-            if (tileType != TileType.ResonanceTile) return;
             isActive = !isActive;
             ApplyVisual();
         }

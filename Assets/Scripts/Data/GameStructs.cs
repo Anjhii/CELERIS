@@ -35,7 +35,8 @@ namespace Celeris.Data
     {
         Moving,
         IdleBetweenTiles,
-        Charging,
+        Charging,           // Phase 1: batería drenándose, el jugador hace taps
+        ReadyToAdvance,     // Phase 2: carga completa, espera orden del jugador
         RotatingArrow,
         Dead,
         Victory

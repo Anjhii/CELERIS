@@ -16,8 +16,7 @@ MonoBehaviour:
   mapLengthSegments: 7
   gridWidth: 1
   batteryLimit: 30
-  proceduralSeed: 12345
+  proceduralSeed: 0
   weightArrow: 3
-  weightLaser: 0
-  weightResonance: 5
-  weightCharge: 0
+  weightLaser: 1
+  weightCharge: 2

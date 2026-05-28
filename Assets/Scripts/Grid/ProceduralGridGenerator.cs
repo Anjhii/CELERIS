@@ -117,19 +117,19 @@ namespace Celeris.Grid
         }
 
         // ── Asigna TileType según segmento y columna X ────────
-        // El tile especial siempre va en el carril central (gridWidth/2).
+        // Tile especial siempre en carril central (gridWidth/2).
+        // SegmentType.Resonance ya no se genera (eliminado en v2).
         private static TileType ResolveTileType(SegmentType seg, int x, int gridWidth)
         {
             bool isCenter = (x == gridWidth / 2);
             return seg switch
             {
-                SegmentType.Start     => TileType.BaseTile,
-                SegmentType.Goal      => TileType.GoalTile,
-                SegmentType.Arrow     => isCenter ? TileType.ArrowTile     : TileType.BaseTile,
-                SegmentType.Laser     => isCenter ? TileType.LaserTile     : TileType.BaseTile,
-                SegmentType.Resonance => isCenter ? TileType.ResonanceTile : TileType.BaseTile,
-                SegmentType.Charge    => isCenter ? TileType.ChargeTile    : TileType.BaseTile,
-                _                     => TileType.BaseTile
+                SegmentType.Start  => TileType.BaseTile,
+                SegmentType.Goal   => TileType.GoalTile,
+                SegmentType.Arrow  => isCenter ? TileType.ArrowTile  : TileType.BaseTile,
+                SegmentType.Laser  => isCenter ? TileType.LaserTile  : TileType.BaseTile,
+                SegmentType.Charge => isCenter ? TileType.ChargeTile : TileType.BaseTile,
+                _                  => TileType.BaseTile
             };
         }
 
