@@ -51,6 +51,14 @@ namespace Celeris.Data
         West     // -X
     }
 
+    public enum DeathCause
+    {
+        None,
+        Battery,
+        Fall,
+        Laser
+    }
+
     // ── Datos persistentes del jugador ───────────────────────
     [Serializable]
     public class PlayerData

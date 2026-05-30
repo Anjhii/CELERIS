@@ -1,10 +1,3 @@
-// ============================================================
-// DroideController.cs  |  Assets/Scripts/Player/
-//
-// ESCENA: GameObject "Droide" (cubo 0.6,0.6,0.6) en GameplayScene.
-// INSPECTOR: Asignar ProceduralGridGenerator.
-//            Ajustar chargeDrainRate y batteryPenalty al gusto.
-// ============================================================
 using System.Collections;
 using Celeris.Data;
 using Celeris.Grid;
@@ -39,24 +32,25 @@ namespace Celeris.Player
         public int   chargeClickBoost  = 1;
 
         // ── Estado público ────────────────────────────────────
-        public DroideState State      { get; private set; } = DroideState.IdleBetweenTiles;
-        public Vector2Int  GridCoord  { get; private set; }
-        public int         Battery    { get; private set; }
-        public int         MaxBattery => startBattery;   // para normalizar UI
+        public DroideState State          { get; private set; } = DroideState.IdleBetweenTiles;
+        public DeathCause  LastDeathCause { get; private set; } = DeathCause.None;
+        public Vector2Int  GridCoord      { get; private set; }
+        public int         Battery        { get; private set; }
+        public int         MaxBattery     => startBattery;
 
         // ── Eventos ───────────────────────────────────────────
         public event System.Action<DroideState>   OnStateChanged;
-        public event System.Action<int>           OnBatteryChanged;   // valor nuevo
+        public event System.Action<int>           OnBatteryChanged;
         public event System.Action<TileComponent> OnTileEntered;
-        public event System.Action                OnLevelReset;       // flash rojo de fallo
+        public event System.Action                OnLevelReset;
 
         // ── Privado ───────────────────────────────────────────
-        private Vector2Int _direction   = new(0, 1);   // Norte por defecto
-        private bool       _running     = false;
-        private bool       _isCharging      = false;
-        private bool       _advanceRequested = false; // señal de salida desde ReadyToAdvance
-        private Coroutine  _drainCoroutine  = null;  // referencia explícita para poder parar el drenaje
-        private int        _loopId          = 0;     // ID de generación: impide loops zombi tras ResetLevel
+        private Vector2Int _direction        = new(0, 1);
+        private bool       _running          = false;
+        private bool       _isCharging       = false;
+        private bool       _advanceRequested = false;
+        private Coroutine  _drainCoroutine   = null;
+        private int        _loopId           = 0;
 
         // ─────────────────────────────────────────────────────
         private void OnEnable()
@@ -73,17 +67,16 @@ namespace Celeris.Player
         private void Init()
         {
             transform.position = generator.StartWorldPos + Vector3.up * 1.1f;
-            GridCoord  = WorldToCoord(generator.StartWorldPos);
-            Battery    = startBattery;
-            _direction = new Vector2Int(0, 1);
+            GridCoord          = WorldToCoord(generator.StartWorldPos);
+            Battery            = startBattery;
+            _direction         = new Vector2Int(0, 1);
+            LastDeathCause     = DeathCause.None;
 
             SetState(DroideState.IdleBetweenTiles);
             StartCoroutine(MovementLoop());
         }
 
         // ── Loop principal ────────────────────────────────────
-        // _loopId evita que un loop antiguo (pausado dentro de una corrutina)
-        // continúe ejecutándose después de que ResetLevel arranque uno nuevo.
         private IEnumerator MovementLoop()
         {
             _running = true;
@@ -94,7 +87,6 @@ namespace Celeris.Player
                 yield return new WaitForSeconds(idleDuration);
                 if (myId != _loopId) yield break;
 
-                // ── Calcular próximo tile ──────────────────────
                 var current = generator.GetTile(GridCoord);
                 if (current != null)
                     _direction = current.GetExitDirection(_direction);
@@ -102,36 +94,35 @@ namespace Celeris.Player
                 Vector2Int nextCoord = GridCoord + _direction;
                 var next = generator.GetTile(nextCoord);
 
-                // Caída al vacío → muerte permanente
                 if (next == null || next.tileType == TileType.VoidTile)
                 {
+                    LastDeathCause = DeathCause.Fall;
                     yield return StartCoroutine(Die());
                     yield break;
                 }
 
-                // ── Mover ─────────────────────────────────────
                 yield return StartCoroutine(MoveToTile(nextCoord));
                 if (myId != _loopId) yield break;
 
-                // ── Consumir batería por movimiento ───────────
                 Battery = Mathf.Max(0, Battery - 1);
                 OnBatteryChanged?.Invoke(Battery);
                 if (Battery <= 0)
                 {
+                    LastDeathCause = DeathCause.Battery;
                     yield return StartCoroutine(Die());
                     yield break;
                 }
 
-                // ── Efecto del tile ───────────────────────────
-                ExitTileCleanup();   // limpieza obligatoria al salir del tile actual
+                ExitTileCleanup();
                 yield return StartCoroutine(HandleTileEffect(next));
-                if (myId != _loopId) yield break;  // ResetLevel arrancó loop nuevo
+                if (myId != _loopId) yield break;
             }
         }
 
         // ── Interpolación de movimiento ───────────────────────
         private IEnumerator MoveToTile(Vector2Int target)
         {
+            SetState(DroideState.IdleBetweenTiles);
             SetState(DroideState.Moving);
             Vector3 origin = transform.position;
             Vector3 dest   = generator.CoordToWorld(target) + Vector3.up * 1.1f;
@@ -150,7 +141,6 @@ namespace Celeris.Player
                     yield return StartCoroutine(Victory());
                     break;
 
-                // Láser activo → no muerte, sino Reset con penalización
                 case TileType.LaserTile when tile.isActive:
                     yield return StartCoroutine(ResetLevel());
                     break;
@@ -166,53 +156,27 @@ namespace Celeris.Player
             }
         }
 
-        // ── Carga: Stress Test ────────────────────────────────
-        // Batería se drena constantemente.
-        // El jugador hace taps para compensar.
-        // Meta: llenar al 100% (startBattery).
-        // Fallo: batería llega a 0 → ResetLevel.
+        // ── Carga ─────────────────────────────────────────────
         private IEnumerator ChargingRoutine()
         {
-            // ── Detener cualquier drenaje previo ──────────────
-            // Cubre el caso de tiles de carga consecutivos:
-            // la corrutina vieja se para explícitamente antes
-            // de que la nueva empiece, eliminando drains paralelos.
             StopDrain();
-
             SetState(DroideState.Charging);
-            _running = false;
+            _running    = false;
             _isCharging = true;
 
-            // Guardar referencia para poder detenerla cuando sea necesario
             _drainCoroutine = StartCoroutine(BatteryDrainRoutine());
-
-            // State lock: el droide permanece en Charging hasta llenarse (éxito)
-            // o vaciarse (fallo). Ningún otro camino puede sacar al droide de aquí.
             yield return new WaitUntil(() => Battery >= startBattery || Battery <= 0);
-
-            // Limpieza garantizada antes de cualquier bifurcación
             StopDrain();
 
             if (Battery >= startBattery)
-            {
-                // ── Éxito: entrar en fase de espera ───────────
-                // El jugador decide cuándo reanudar (tap, hold+pulso o timeout 1.5s).
                 yield return StartCoroutine(ReadyToAdvanceRoutine());
-            }
             else
             {
-                // ── Fallo: resetear nivel ─────────────────────
+                LastDeathCause = DeathCause.Battery;
                 yield return StartCoroutine(ResetLevel());
             }
         }
 
-        // ── Phase 2: Espera activa tras carga completa ────────
-        // El Droide queda en pausa con feedback visual (BatteryUI cian).
-        // Dos salidas posibles:
-        //   • Hold 0.5s    → TriggerElectricPulseExtended() + ConfirmAdvance()
-        //                    inmediato desde MobileInputHandler.HandleHold.
-        //   • Timeout 1.5s → avance automático sin input del jugador.
-        // El Tap simple NO hace nada aquí: el avance siempre es automático.
         private IEnumerator ReadyToAdvanceRoutine()
         {
             _advanceRequested = false;
@@ -227,16 +191,12 @@ namespace Celeris.Player
                 yield return null;
             }
 
-            // Salida limpia: ExitTileCleanup() ya llamó StopDrain en ChargingRoutine,
-            // pero lo repetimos aquí para cubrir cualquier estado residual.
             ExitTileCleanup();
-
             _running = true;
             SetState(DroideState.IdleBetweenTiles);
             StartCoroutine(MovementLoop());
         }
 
-        // Corrutina independiente: drena la batería mientras _isCharging == true
         private IEnumerator BatteryDrainRoutine()
         {
             float accumulated = 0f;
@@ -245,9 +205,9 @@ namespace Celeris.Player
                 accumulated += chargeDrainRate * Time.deltaTime;
                 if (accumulated >= 1f)
                 {
-                    int drain  = Mathf.FloorToInt(accumulated);
+                    int drain   = Mathf.FloorToInt(accumulated);
                     accumulated -= drain;
-                    Battery    = Mathf.Max(0, Battery - drain);
+                    Battery     = Mathf.Max(0, Battery - drain);
                     OnBatteryChanged?.Invoke(Battery);
                 }
                 yield return null;
@@ -255,35 +215,35 @@ namespace Celeris.Player
         }
 
         // ── Reset de nivel ────────────────────────────────────
-        // Activa: láser sin desactivar, batería a 0 durante carga.
-        // Efecto: penalización + vuelta al inicio + nuevo loop.
         private IEnumerator ResetLevel()
         {
             _running = false;
-            StopDrain();          // seguridad: para el drenaje si venimos de ChargeTile
-            SetState(DroideState.Dead);
-            OnLevelReset?.Invoke();
+            StopDrain();
+            if (LastDeathCause == DeathCause.None)
+                LastDeathCause = DeathCause.Laser;
 
-            // Penalización
             Battery = Mathf.Max(0, Battery - batteryPenalty);
             OnBatteryChanged?.Invoke(Battery);
 
-            if (Battery <= 0)
-            {
-                // Sin batería suficiente → muerte permanente
-                yield break;
-            }
+            SetState(DroideState.Dead);
+            OnLevelReset?.Invoke();
 
-            // Volver al inicio con animación
+            if (LastDeathCause == DeathCause.Battery)
+                yield return new WaitForSeconds(2.0f);
+
+            if (Battery <= 0)
+                yield break;
+
             Vector3 startPos = generator.StartWorldPos + Vector3.up * 1.1f;
             yield return LerpPosition(transform.position, startPos, resetMoveDuration);
 
             transform.position = startPos;
             GridCoord          = WorldToCoord(generator.StartWorldPos);
             _direction         = new Vector2Int(0, 1);
+            LastDeathCause     = DeathCause.None;
 
             SetState(DroideState.IdleBetweenTiles);
-            StartCoroutine(MovementLoop()); // _loopId++ aquí → el loop antiguo se autodestruye
+            StartCoroutine(MovementLoop());
         }
 
         // ── Muerte y Victoria ─────────────────────────────────
@@ -301,12 +261,7 @@ namespace Celeris.Player
             yield return null;
         }
 
-        // ── API pública (llamada desde MobileInputHandler) ────
-
-        /// <summary>
-        /// Pulso estándar (Rango 1): desactiva Laser tiles en los 4 vecinos
-        /// inmediatos (Manhattan ≤ 1). Usado por Tap en movimiento normal.
-        /// </summary>
+        // ── API pública ───────────────────────────────────────
         public void TriggerElectricPulse()
         {
             for (int dx = -1; dx <= 1; dx++)
@@ -317,27 +272,18 @@ namespace Celeris.Player
             }
         }
 
-        /// <summary>
-        /// Pulso extendido (Rango 2): rango 1 + tile a 2 pasos en la dirección
-        /// de movimiento actual. Exclusivo del Hold durante ReadyToAdvance.
-        /// </summary>
         public void TriggerElectricPulseExtended()
         {
-            TriggerElectricPulse();                          // rango 1
-            ToggleLaserAt(GridCoord + _direction * 2);       // + rango 2
+            TriggerElectricPulse();
+            ToggleLaserAt(GridCoord + _direction * 2);
         }
 
-        /// <summary>
-        /// Señal de avance desde el estado ReadyToAdvance.
-        /// Llamar tras Tap corto o tras soltar un Hold en ese estado.
-        /// </summary>
         public void ConfirmAdvance()
         {
             if (State != DroideState.ReadyToAdvance) return;
             _advanceRequested = true;
         }
 
-        /// <summary>Suma batería durante el Stress Test de carga.</summary>
         public void RegisterChargeClick()
         {
             if (State != DroideState.Charging) return;
@@ -345,7 +291,6 @@ namespace Celeris.Player
             OnBatteryChanged?.Invoke(Battery);
         }
 
-        /// <summary>Rota la flecha del tile en la posición actual del droide.</summary>
         public void RotateCurrentArrow()
         {
             var tile = generator.GetTile(GridCoord);
@@ -356,11 +301,6 @@ namespace Celeris.Player
             }
         }
 
-        /// <summary>
-        /// Limpieza obligatoria al abandonar un tile.
-        /// Para cualquier drenaje activo y normaliza el estado si quedó
-        /// colgado en Charging o RotatingArrow.
-        /// </summary>
         public void ExitTileCleanup()
         {
             StopDrain();
@@ -368,10 +308,6 @@ namespace Celeris.Player
                 SetState(DroideState.IdleBetweenTiles);
         }
 
-        /// <summary>
-        /// True si hay un LaserTile activo en Manhattan ≤ 1 (4 vecinos inmediatos).
-        /// Condición necesaria para que un Tap en movimiento normal dispare el pulso.
-        /// </summary>
         public bool HasLaserAtRangeOne()
         {
             for (int dx = -1; dx <= 1; dx++)
@@ -385,10 +321,6 @@ namespace Celeris.Player
             return false;
         }
 
-        /// <summary>
-        /// True si hay un LaserTile activo en Manhattan ≤ 1 O a 2 pasos
-        /// en la dirección de movimiento. Usado para el Hold en ReadyToAdvance.
-        /// </summary>
         public bool HasLaserInLookahead()
         {
             if (HasLaserAtRangeOne()) return true;
@@ -397,10 +329,6 @@ namespace Celeris.Player
         }
 
         // ── Helpers ───────────────────────────────────────────
-
-        /// <summary>
-        /// Alterna el estado de un LaserTile en la coordenada dada (null-safe).
-        /// </summary>
         private void ToggleLaserAt(Vector2Int coord)
         {
             var tile = generator.GetTile(coord);
@@ -408,11 +336,6 @@ namespace Celeris.Player
                 tile.ToggleLaser();
         }
 
-        /// <summary>
-        /// Para el drenaje de batería de forma explícita y segura.
-        /// Usar StopCoroutine en lugar de depender del flag para evitar
-        /// que dos instancias de BatteryDrainRoutine corran en paralelo.
-        /// </summary>
         private void StopDrain()
         {
             if (_drainCoroutine != null)
