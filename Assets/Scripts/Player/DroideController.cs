@@ -119,14 +119,30 @@ namespace Celeris.Player
             }
         }
 
-        // ── Interpolación de movimiento ───────────────────────
+        // ── Interpolación de movimiento + rotación ───────────
         private IEnumerator MoveToTile(Vector2Int target)
         {
-            SetState(DroideState.IdleBetweenTiles);
             SetState(DroideState.Moving);
-            Vector3 origin = transform.position;
-            Vector3 dest   = generator.CoordToWorld(target) + Vector3.up * 1.1f;
-            yield return LerpPosition(origin, dest, moveDuration);
+
+            Vector3    origin    = transform.position;
+            Vector3    dest      = generator.CoordToWorld(target) + Vector3.up * 1.1f;
+            Quaternion startRot  = transform.rotation;
+            // Calcular rotación objetivo en Y según _direction (plano XZ)
+            Quaternion targetRot = Quaternion.LookRotation(
+                new Vector3(_direction.x, 0f, _direction.y), Vector3.up);
+
+            float elapsed = 0f;
+            while (elapsed < moveDuration)
+            {
+                elapsed            += Time.deltaTime;
+                float t             = Mathf.Clamp01(elapsed / moveDuration);
+                transform.position  = Vector3.Lerp(origin, dest, t);
+                transform.rotation  = Quaternion.Slerp(startRot, targetRot, t);
+                yield return null;
+            }
+            transform.position = dest;
+            transform.rotation = targetRot;
+
             GridCoord = target;
             OnTileEntered?.Invoke(generator.GetTile(target));
             SetState(DroideState.IdleBetweenTiles);
@@ -238,6 +254,7 @@ namespace Celeris.Player
             yield return LerpPosition(transform.position, startPos, resetMoveDuration);
 
             transform.position = startPos;
+            transform.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up); // Norte
             GridCoord          = WorldToCoord(generator.StartWorldPos);
             _direction         = new Vector2Int(0, 1);
             LastDeathCause     = DeathCause.None;

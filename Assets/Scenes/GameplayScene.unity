@@ -320,13 +320,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 234054098}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.23911765, y: 0.3696438, z: -0.09904577, w: 0.89239913}
-  m_LocalPosition: {x: -10, y: 10, z: -10}
+  m_LocalRotation: {x: 0.09904577, y: -0.89239913, z: 0.23911765, w: 0.3696438}
+  m_LocalPosition: {x: 10, y: 10, z: 10}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 30, y: 45, z: 0}
+  m_LocalEulerAnglesHint: {x: 30, y: -135, z: 0}
 --- !u!114 &234054102
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -383,8 +383,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e9e482d702fec144d9a506e09cc41f71, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  player: {fileID: 1254990652}
+  player: {fileID: 645165031}
   smoothTime: 0.1
+  rotationSpeed: 5
 --- !u!1 &470269338
 GameObject:
   m_ObjectHideFlags: 0
@@ -717,6 +718,7 @@ GameObject:
   m_Component:
   - component: {fileID: 823865157}
   - component: {fileID: 823865156}
+  - component: {fileID: 823865158}
   m_Layer: 0
   m_Name: GridGenerator
   m_TagString: Untagged
@@ -739,8 +741,11 @@ MonoBehaviour:
   config: {fileID: 11400000, guid: 66152b206b49f54449167fbee87234aa, type: 2}
   tilePrefab: {fileID: 6679137589564699519, guid: c1b64b29a9d370844a8e07b30b6074f5,
     type: 3}
+  minStraightSteps: 2
+  maxStraightSteps: 5
+  turnProbability: 0.4
   waveSpeed: 8
-  waveZDelay: 0.04
+  tileDelay: 0.05
 --- !u!4 &823865157
 Transform:
   m_ObjectHideFlags: 0
@@ -756,6 +761,21 @@ Transform:
   m_Children: []
   m_Father: {fileID: 1203549742}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &823865158
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 823865155}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c309b336cb4c67e478e88c0b37680227, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  generator: {fileID: 0}
+  droide: {fileID: 0}
+  victoryDelay: 1
 --- !u!1 &841310304
 GameObject:
   m_ObjectHideFlags: 0
