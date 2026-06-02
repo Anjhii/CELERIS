@@ -5,21 +5,23 @@
 //         (Image transparente, Raycast Target = ON) en GameplayScene.
 // INSPECTOR: Asignar DroideController + pulseButtonImage (opcional).
 //
-// ARQUITECTURA DE DOS TUBERÍAS
-// ────────────────────────────
-// • Tubería 1 (Carga)   : tap corto → RegisterChargeClick, siempre.
-// • Tubería 2 (Pulso)   : tap corto → TryEnqueuePulse, ciego al estado
-//                         (solo bloquea en Dead / Victory).
-// Las dos tuberías son independientes: durante un ChargeTile el jugador
-// puede seguir haciendo taps para subir la batería Y encolar un pulso
-// para el siguiente LaserTile.
+// LÓGICA DE INPUT
+// ───────────────
+// • Tap corto en Charging       : RegisterChargeClick (sube batería).
+// • Tap corto en movimiento     : dispara pulso rango-1 SOLO si hay un
+//                                 LaserTile activo adyacente (rango 1).
+//                                 Si no hay objetivo, el tap se descarta.
+// • Tap corto en ReadyToAdvance : ignorado — el avance es siempre automático.
+// • Hold 0.5s en ReadyToAdvance : TriggerElectricPulseExtended (rango 2)
+//                                 + ConfirmAdvance inmediato (no espera soltar).
+// • Hold 0.5s en movimiento     : RotateCurrentArrow.
 //
 // COLA CON REEMPLAZO DE PRIORIDAD
 // ───────────────────────────────
-// _pulseQueue es List<bool>; el bool indica si el pulso tiene objetivo
-// real (HasLaserInLookahead == true).  Cuando la cola está llena y llega
-// un tap de alta prioridad, reemplaza el primer elemento de baja prioridad
-// que encuentre.  Así los pulsos "ciegos" no bloquean a los urgentes.
+// _pulseQueue es List<bool>; el bool indica si el pulso tenía objetivo real
+// (HasLaserAtRangeOne) al encolarse.  Solo se encolan pulsos validados —
+// nunca pulsos ciegos.  Si la cola está llena y llega un tap de alta
+// prioridad, sustituye el primer elemento de baja prioridad.
 //
 // FEEDBACK VISUAL 3 ESTADOS
 // ─────────────────────────
@@ -70,7 +72,7 @@ namespace Celeris.Input
         private bool       _isDown          = false;
         private float      _lastPulseTime   = -999f;
 
-        // Cola de pulsos: bool = isHighPriority (láser detectado en lookahead al encolar)
+        // Cola de pulsos: bool = isHighPriority (láser a rango 1 al encolar)
         private readonly List<bool> _pulseQueue = new();
 
         // ─────────────────────────────────────────────────────
@@ -84,8 +86,7 @@ namespace Celeris.Input
             if (droide != null) droide.OnStateChanged -= HandleDroideStateChanged;
         }
 
-        // Vaciar la cola si el droide muere o gana — no tiene sentido
-        // mantener pulsos pendientes cuando el juego terminó.
+        // Vaciar la cola si el droide muere o gana.
         private void HandleDroideStateChanged(DroideState state)
         {
             if (state == DroideState.Dead || state == DroideState.Victory)
@@ -105,17 +106,12 @@ namespace Celeris.Input
             if (!_isDown) return;
             _isDown = false;
 
+            // Si el hold ya se procesó, no hay tap que interpretar.
+            // El hold en ReadyToAdvance ya llamó ConfirmAdvance inmediatamente
+            // desde HandleHold; no hace falta nada más al soltar.
+            if (_holdFired) return;
+
             float duration = Time.unscaledTime - _pointerDownTime;
-
-            // Si el hold ya disparó el pulso estando en ReadyToAdvance,
-            // confirmar avance al soltar (el pulso fue la "acción extra").
-            if (_holdFired)
-            {
-                if (droide != null && droide.State == DroideState.ReadyToAdvance)
-                    droide.ConfirmAdvance();
-                return;
-            }
-
             if (duration < shortTapMax)
                 HandleShortTap();
             // zona muerta [shortTapMax, holdMin]: ignorar
@@ -133,9 +129,8 @@ namespace Celeris.Input
             }
 
             // ── Drenar cola de pulsos ─────────────────────────
-            // Solo se bloquea en Dead / Victory (loop acabado).
-            // En todos los demás estados (incluyendo Charging) los pulsos
-            // encolados siguen drenándose con normalidad.
+            // Los pulsos encolados se disparan con rango 1.
+            // Se bloquea solo en Dead / Victory.
             if (_pulseQueue.Count > 0 && droide != null &&
                 droide.State != DroideState.Dead &&
                 droide.State != DroideState.Victory)
@@ -145,7 +140,7 @@ namespace Celeris.Input
                 {
                     _pulseQueue.RemoveAt(0);
                     _lastPulseTime = Time.unscaledTime;
-                    droide.TriggerElectricPulse();
+                    droide.TriggerElectricPulse();   // rango 1
                 }
             }
 
@@ -153,42 +148,47 @@ namespace Celeris.Input
             UpdateButtonVisual();
         }
 
-        // ── Tap corto — TRES CASOS ────────────────────────────
-        // 1. ReadyToAdvance  : confirmar avance inmediato (sin pulso).
-        // 2. Charging        : sumar batería (Tubería 1) + encolar pulso (Tubería 2).
-        // 3. Resto           : solo encolar pulso (Tubería 2).
+        // ── Tap corto ─────────────────────────────────────────
         private void HandleShortTap()
         {
             if (droide == null) return;
 
-            // Caso 1: el jugador da la orden de avance tras la carga completa
-            if (droide.State == DroideState.ReadyToAdvance)
+            // ReadyToAdvance: el tap no hace nada.
+            // El avance es automático (timeout) o por Hold.
+            if (droide.State == DroideState.ReadyToAdvance) return;
+
+            // Charging: suma batería durante el Stress Test.
+            if (droide.State == DroideState.Charging)
             {
-                droide.ConfirmAdvance();
-                return;   // no encolar pulso ni booster de batería
+                droide.RegisterChargeClick();
+                return;   // durante la carga no se encolan pulsos de rango 1
             }
 
-            // Tubería 1: carga — suma batería durante el Stress Test
-            if (droide.State == DroideState.Charging)
-                droide.RegisterChargeClick();
-
-            // Tubería 2: pulso — solo se bloquea en Dead / Victory
+            // Movimiento normal: encolar pulso SOLO si hay láser adyacente (rango 1).
+            // Si no hay objetivo, el tap se descarta silenciosamente.
             if (droide.State != DroideState.Dead &&
-                droide.State != DroideState.Victory)
+                droide.State != DroideState.Victory &&
+                droide.HasLaserAtRangeOne())
+            {
                 TryEnqueuePulse();
+            }
         }
 
         // ── Encolar con reemplazo de prioridad ────────────────
+        // Solo se llega aquí cuando HasLaserAtRangeOne() es true,
+        // así que todos los pulsos encolados tienen objetivo real.
         private void TryEnqueuePulse()
         {
-            // Evaluar prioridad en el momento del tap
-            bool isHighPriority = droide != null && droide.HasLaserInLookahead();
+            // El bool de prioridad sigue usando HasLaserAtRangeOne
+            // para que si por alguna razón se llama sin objetivo, se marque
+            // correctamente como baja prioridad y pueda ser reemplazado.
+            bool isHighPriority = droide.HasLaserAtRangeOne();
 
             // Cooldown expirado: disparar inmediatamente sin pasar por la cola
             if (Time.unscaledTime - _lastPulseTime >= pulseCooldown)
             {
                 _lastPulseTime = Time.unscaledTime;
-                droide.TriggerElectricPulse();
+                droide.TriggerElectricPulse();   // rango 1
                 return;
             }
 
@@ -199,14 +199,13 @@ namespace Celeris.Input
                 return;
             }
 
-            // Cola llena: si el nuevo tap tiene alta prioridad, busca el primer
-            // elemento de baja prioridad y lo sustituye.
+            // Cola llena: reemplazar primer elemento de baja prioridad
+            // si el nuevo tap tiene objetivo real.
             if (isHighPriority)
             {
                 int lowIdx = _pulseQueue.IndexOf(false);
                 if (lowIdx >= 0)
                     _pulseQueue[lowIdx] = true;
-                // Si todos ya son alta prioridad: este tap se descarta (ya están cubiertos)
             }
             // Baja prioridad + cola llena → descartar silenciosamente
         }
@@ -216,14 +215,16 @@ namespace Celeris.Input
         {
             if (droide == null) return;
 
-            // En ReadyToAdvance: hold = pulso eléctrico (desactiva láseres en rango).
-            // El avance se confirma al soltar el dedo, en OnPointerUp.
+            // ReadyToAdvance: pulso extendido (rango 2) + avance inmediato.
+            // No se espera a soltar el dedo: el Droide reanuda al instante.
             if (droide.State == DroideState.ReadyToAdvance)
             {
-                droide.TriggerElectricPulse();
+                droide.TriggerElectricPulseExtended();
+                droide.ConfirmAdvance();
                 return;
             }
 
+            // Movimiento normal: rotar la flecha del tile actual.
             droide.RotateCurrentArrow();
         }
 
