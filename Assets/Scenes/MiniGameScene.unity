@@ -175,8 +175,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   glyphImage: {fileID: 97297676}
   glyphButton: {fileID: 97297675}
-  normalColor: {r: 0.15, g: 0.15, b: 0.15, a: 1}
-  glowColor: {r: 0, g: 1, b: 1, a: 1}
+  normalColor: {r: 0.2528302, g: 0.2528302, b: 0.2528302, a: 1}
+  glowColor: {r: 1, g: 1, b: 1, a: 1}
   glyphSound: {fileID: 8300000, guid: 7be7cc95767613b4d8f0a547af083d49, type: 3}
 --- !u!114 &97297675
 MonoBehaviour:
@@ -242,8 +242,8 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 10905, guid: 0000000000000000f000000000000000, type: 0}
-  m_Type: 1
+  m_Sprite: {fileID: 21300000, guid: 6c680c351ba5d214c9cf3a5d12b533c2, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -405,8 +405,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   glyphImage: {fileID: 365348694}
   glyphButton: {fileID: 365348693}
-  normalColor: {r: 0.15, g: 0.15, b: 0.15, a: 1}
-  glowColor: {r: 0, g: 1, b: 1, a: 1}
+  normalColor: {r: 0.2528302, g: 0.2528302, b: 0.2528302, a: 1}
+  glowColor: {r: 1, g: 1, b: 1, a: 1}
   glyphSound: {fileID: 8300000, guid: 0544f4dadce93c449b3cc7f58af9d868, type: 3}
 --- !u!114 &365348693
 MonoBehaviour:
@@ -472,8 +472,8 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 10905, guid: 0000000000000000f000000000000000, type: 0}
-  m_Type: 1
+  m_Sprite: {fileID: 21300000, guid: 68cd828a723c9704582b701926595307, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -520,7 +520,7 @@ RectTransform:
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
+  m_ConstrainProportionsScale: 1
   m_Children: []
   m_Father: {fileID: 688616225}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
@@ -543,8 +543,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   glyphImage: {fileID: 418828429}
   glyphButton: {fileID: 418828428}
-  normalColor: {r: 0.15, g: 0.15, b: 0.15, a: 1}
-  glowColor: {r: 0, g: 1, b: 1, a: 1}
+  normalColor: {r: 0.2528302, g: 0.2528302, b: 0.2528302, a: 1}
+  glowColor: {r: 1, g: 1, b: 1, a: 1}
   glyphSound: {fileID: 8300000, guid: cbbcb1eb0e192b8488668a39baf1080d, type: 3}
 --- !u!114 &418828428
 MonoBehaviour:
@@ -610,8 +610,8 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 10905, guid: 0000000000000000f000000000000000, type: 0}
-  m_Type: 1
+  m_Sprite: {fileID: 21300000, guid: a71f0b8983b63d349a572849ab1c402a, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -681,8 +681,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   glyphImage: {fileID: 424997378}
   glyphButton: {fileID: 424997377}
-  normalColor: {r: 0.15, g: 0.15, b: 0.15, a: 1}
-  glowColor: {r: 0, g: 1, b: 1, a: 1}
+  normalColor: {r: 0.2528302, g: 0.2528302, b: 0.2528302, a: 1}
+  glowColor: {r: 1, g: 1, b: 1, a: 1}
   glyphSound: {fileID: 8300000, guid: 9d2b45541a5d23f4e98c9c5a5ac23ac2, type: 3}
 --- !u!114 &424997377
 MonoBehaviour:
@@ -748,8 +748,8 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 10905, guid: 0000000000000000f000000000000000, type: 0}
-  m_Type: 1
+  m_Sprite: {fileID: 21300000, guid: ecb88b5f94cc85e4c997600f60031051, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -1005,8 +1005,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   glyphImage: {fileID: 583758242}
   glyphButton: {fileID: 583758241}
-  normalColor: {r: 0.15, g: 0.15, b: 0.15, a: 1}
-  glowColor: {r: 0, g: 1, b: 1, a: 1}
+  normalColor: {r: 0.2528302, g: 0.2528302, b: 0.2528302, a: 1}
+  glowColor: {r: 1, g: 1, b: 1, a: 1}
   glyphSound: {fileID: 8300000, guid: 8367602cc58211f4894063c4bca29e6e, type: 3}
 --- !u!114 &583758241
 MonoBehaviour:
@@ -1072,8 +1072,8 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 10905, guid: 0000000000000000f000000000000000, type: 0}
-  m_Type: 1
+  m_Sprite: {fileID: 21300000, guid: d0273599b5f91384ab9039fcbfed6dae, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -1143,8 +1143,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   glyphImage: {fileID: 638787256}
   glyphButton: {fileID: 638787255}
-  normalColor: {r: 0.15, g: 0.15, b: 0.15, a: 1}
-  glowColor: {r: 0, g: 1, b: 1, a: 1}
+  normalColor: {r: 0.2528302, g: 0.2528302, b: 0.2528302, a: 1}
+  glowColor: {r: 1, g: 1, b: 1, a: 1}
   glyphSound: {fileID: 8300000, guid: 2b6975a7000316a43931a8742ddb399f, type: 3}
 --- !u!114 &638787255
 MonoBehaviour:
@@ -1210,8 +1210,8 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 10905, guid: 0000000000000000f000000000000000, type: 0}
-  m_Type: 1
+  m_Sprite: {fileID: 21300000, guid: 46501798106f9d14fb7b9f9d6c6bac8f, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -1295,7 +1295,82 @@ MonoBehaviour:
   m_CellSize: {x: 390, y: 390}
   m_Spacing: {x: 50, y: 50}
   m_Constraint: 1
-  m_ConstraintCount: 4
+  m_ConstraintCount: 2
+--- !u!1 &1056834981
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1056834982}
+  - component: {fileID: 1056834984}
+  - component: {fileID: 1056834983}
+  m_Layer: 5
+  m_Name: Panel
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!224 &1056834982
+RectTransform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1056834981}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1926224451}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 0, y: 0}
+  m_Pivot: {x: 0.5, y: 0.5}
+--- !u!114 &1056834983
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1056834981}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  m_Material: {fileID: 0}
+  m_Color: {r: 0.11764707, g: 0.10196079, b: 0.12941177, a: 1}
+  m_RaycastTarget: 1
+  m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
+  m_Maskable: 1
+  m_OnCullStateChanged:
+    m_PersistentCalls:
+      m_Calls: []
+  m_Sprite: {fileID: 10907, guid: 0000000000000000f000000000000000, type: 0}
+  m_Type: 1
+  m_PreserveAspect: 0
+  m_FillCenter: 1
+  m_FillMethod: 4
+  m_FillAmount: 1
+  m_FillClockwise: 1
+  m_FillOrigin: 0
+  m_UseSpriteMesh: 0
+  m_PixelsPerUnitMultiplier: 1
+--- !u!222 &1056834984
+CanvasRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1056834981}
+  m_CullTransparentMesh: 1
 --- !u!1 &1225746412
 GameObject:
   m_ObjectHideFlags: 0
@@ -1347,15 +1422,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_Material: {fileID: 0}
-  m_Color: {r: 0, g: 0, b: 0, a: 0.78431374}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 10907, guid: 0000000000000000f000000000000000, type: 0}
-  m_Type: 1
+  m_Sprite: {fileID: 21300000, guid: b55d3cdbdf7ef574fa0006f4037fef03, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -1493,8 +1568,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   glyphImage: {fileID: 1538772628}
   glyphButton: {fileID: 1538772627}
-  normalColor: {r: 0.15, g: 0.15, b: 0.15, a: 1}
-  glowColor: {r: 0, g: 1, b: 1, a: 1}
+  normalColor: {r: 0.2528302, g: 0.2528302, b: 0.2528302, a: 1}
+  glowColor: {r: 1, g: 1, b: 1, a: 1}
   glyphSound: {fileID: 8300000, guid: 8c30f0985c088424eb7846e2e8bac9ae, type: 3}
 --- !u!114 &1538772627
 MonoBehaviour:
@@ -1560,8 +1635,8 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 10905, guid: 0000000000000000f000000000000000, type: 0}
-  m_Type: 1
+  m_Sprite: {fileID: 21300000, guid: 3e6c365db40d652478806428aefd5cbc, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -1631,8 +1706,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   glyphImage: {fileID: 1625957583}
   glyphButton: {fileID: 1625957582}
-  normalColor: {r: 0.15, g: 0.15, b: 0.15, a: 1}
-  glowColor: {r: 0, g: 1, b: 1, a: 1}
+  normalColor: {r: 0.2528302, g: 0.2528302, b: 0.2528302, a: 1}
+  glowColor: {r: 1, g: 1, b: 1, a: 1}
   glyphSound: {fileID: 8300000, guid: 34e280bedc5f76948a2e6689bc0dfaf8, type: 3}
 --- !u!114 &1625957582
 MonoBehaviour:
@@ -1698,8 +1773,8 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 10905, guid: 0000000000000000f000000000000000, type: 0}
-  m_Type: 1
+  m_Sprite: {fileID: 21300000, guid: 94b8eecba47fee04fa8618af31cb637c, type: 3}
+  m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
   m_FillMethod: 4
@@ -1780,7 +1855,7 @@ MonoBehaviour:
   m_UiScaleMode: 1
   m_ReferencePixelsPerUnit: 100
   m_ScaleFactor: 1
-  m_ReferenceResolution: {x: 1920, y: 1080}
+  m_ReferenceResolution: {x: 1080, y: 1920}
   m_ScreenMatchMode: 0
   m_MatchWidthOrHeight: 0.5
   m_PhysicalUnit: 3
@@ -1823,6 +1898,7 @@ RectTransform:
   m_LocalScale: {x: 0, y: 0, z: 0}
   m_ConstrainProportionsScale: 0
   m_Children:
+  - {fileID: 1056834982}
   - {fileID: 1225746413}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
