@@ -1,33 +1,30 @@
 // ============================================================
 // LevelManager.cs  |  Assets/Scripts/Core/
 //
-// SETUP (hacer UNA sola vez):
-//   1. En LoginScene (la primera escena del juego), crear un
-//      GameObject vacío llamado "LevelManager".
-//   2. Adjuntar este script.
-//   3. Listo. DontDestroyOnLoad lo mantiene vivo en todas las
-//      escenas siguientes (MainMenuScene, GameplayScene, etc.)
+// PROGRESO POR USUARIO:
+//   El nivel actual se guarda bajo la clave
+//   "CELERIS_Level_{userId}" en PlayerPrefs, donde userId es
+//   el UUID de Supabase del jugador autenticado.
+//   Esto garantiza que cada cuenta tenga su propio progreso,
+//   incluso en el mismo dispositivo.
 //
-// ¿POR QUÉ LoginScene y no MainMenuScene?
-//   Porque si el flujo va LoginScene → GameplayScene (omitiendo
-//   MainMenuScene), LevelManager debe existir antes de llegar a
-//   GameplayScene. LoginScene siempre es la primera.
-//
-// REQUISITO DE ASSETS:
-//   Assets/Resources/LevelConfigs/Level01.asset … Level09.asset
-//   (Todos los .asset deben estar en esa carpeta exacta)
+//   Flujo de autenticación:
+//     Login/Registro → AuthManager.ApplySession()
+//       → LevelManager.BindToUser(userId)      (cambia la clave activa)
+//       → LevelManager.ApplyServerProgress(n)  (aplica nivel del servidor)
+//     Logout → AuthManager.ClearSession()
+//       → LevelManager.UnbindUser()            (vuelve a clave anónima / 0)
 //
 // API PÚBLICA:
-//   LevelManager.Instance.LoadMiniGame()       → carga MiniGameScene
-//   LevelManager.Instance.AdvanceLevel()       → siguiente nivel + GameplayScene
-//   LevelManager.Instance.RetryCurrentLevel()  → mismo nivel de nuevo
-//   LevelManager.Instance.ResetProgress()      → vuelve al nivel 1
-//   LevelManager.CurrentLevelIndex             → índice base-0
-//   LevelManager.CurrentLevelNumber            → número base-1 (para UI)
-//   LevelManager.Instance.CurrentConfig        → config del nivel activo
-//   LevelManager.EnsureExists()                → devuelve la instancia;
-//                                                si no existe la crea.
-//                                                Usar solo como fallback.
+//   LevelManager.CurrentLevelIndex / CurrentLevelNumber
+//   LevelManager.Instance.BindToUser(userId)
+//   LevelManager.Instance.ApplyServerProgress(levelIndex)
+//   LevelManager.Instance.UnbindUser()
+//   LevelManager.Instance.AdvanceLevel()
+//   LevelManager.Instance.RetryCurrentLevel()
+//   LevelManager.Instance.ResetProgress()
+//   LevelManager.Instance.GoToLevel(n)
+//   LevelManager.EnsureExists()
 // ============================================================
 using Celeris.Config;
 using UnityEngine;
@@ -40,27 +37,36 @@ namespace Celeris.Core
         // ── Singleton ─────────────────────────────────────────
         public static LevelManager Instance { get; private set; }
 
-        // ── Inspector: estado visible para el equipo ──────────
-        [Header("── Estado del progreso (solo lectura en Play) ──")]
-        [Tooltip("Nivel en el que está el jugador ahora mismo")]
+        // ── Inspector ─────────────────────────────────────────
+        [Header("── Estado (solo lectura en Play) ──")]
         [SerializeField] private string _nivelActual   = "–";
-        [Tooltip("Total de niveles detectados en Resources/LevelConfigs/")]
         [SerializeField] private string _totalNiveles  = "–";
-        [Tooltip("Nombre del asset de config activo")]
         [SerializeField] private string _configActiva  = "–";
+        [SerializeField] private string _usuarioActivo = "anónimo";
 
-        // ── Persistencia ──────────────────────────────────────
-        private const string PREFS_KEY = "CELERIS_CurrentLevel";
+        // ── Clave de progreso (cambia al autenticarse) ────────
+        // Mientras no hay sesión se usa la clave anónima.
+        // Al hacer BindToUser() se conmuta a la clave del usuario.
+        private const string ANON_KEY    = "CELERIS_Level_anon";
+        private const string KEY_PREFIX  = "CELERIS_Level_";
+        private string       _activeKey  = ANON_KEY;
 
+        // ── Propiedad de nivel actual ─────────────────────────
         public static int CurrentLevelIndex
         {
-            get => PlayerPrefs.GetInt(PREFS_KEY, 0);
-            private set { PlayerPrefs.SetInt(PREFS_KEY, value); PlayerPrefs.Save(); }
+            get => PlayerPrefs.GetInt(
+                       Instance != null ? Instance._activeKey : ANON_KEY, 0);
+            private set
+            {
+                PlayerPrefs.SetInt(
+                    Instance != null ? Instance._activeKey : ANON_KEY, value);
+                PlayerPrefs.Save();
+            }
         }
 
         public static int CurrentLevelNumber => CurrentLevelIndex + 1;
 
-        // ── Total de niveles (auto-detectado) ─────────────────
+        // ── Total de niveles ──────────────────────────────────
         private int _totalLevelsCached = -1;
         public int TotalLevels
         {
@@ -73,11 +79,13 @@ namespace Celeris.Core
                                $"LevelConfigs/Level{(count + 1):D2}") != null)
                         count++;
                     _totalLevelsCached = Mathf.Max(count, 1);
-                    _totalNiveles = _totalLevelsCached.ToString();
                 }
                 return _totalLevelsCached;
             }
         }
+
+        // ── Flag: venimos de portal ───────────────────────────
+        private bool _isPortalTransition = false;
 
         // ── Lifecycle ─────────────────────────────────────────
         private void Awake()
@@ -90,53 +98,117 @@ namespace Celeris.Core
             Instance = this;
             DontDestroyOnLoad(gameObject);
             RefreshDebugFields();
-            Debug.Log($"[LevelManager] Iniciado — Nivel {CurrentLevelNumber} / {TotalLevels}");
+            Debug.Log($"[LevelManager] Iniciado — clave='{_activeKey}' " +
+                      $"Nivel {CurrentLevelNumber}");
         }
 
-        // Actualiza los campos visibles en Inspector durante Play Mode
         private void RefreshDebugFields()
         {
-            _nivelActual  = $"Nivel {CurrentLevelNumber}  (índice {CurrentLevelIndex})";
+            _nivelActual  = $"Nivel {CurrentLevelNumber} (idx {CurrentLevelIndex})";
             _totalNiveles = TotalLevels.ToString();
             var cfg = CurrentConfig;
-            _configActiva = cfg != null ? cfg.name : "⚠ NO ENCONTRADA — mover assets a Resources/LevelConfigs/";
+            _configActiva = cfg != null ? cfg.name : "⚠ NO ENCONTRADA";
         }
 
-        // ── EnsureExists — fallback de seguridad ──────────────
+        // ── API de usuario ────────────────────────────────────
+
         /// <summary>
-        /// Devuelve la instancia existente o crea una nueva de emergencia.
-        /// Los scripts (GameFlowManager, MiniGameSimulator) deben usar ESTO
-        /// en lugar de comprobar Instance == null, para que el flujo nunca
-        /// se rompa silenciosamente al testear desde una escena media.
+        /// Enlaza el progreso al userId autenticado.
+        /// Cambia la clave activa a "CELERIS_Level_{userId}".
+        /// Si el usuario no tiene registro local, empieza en 0
+        /// hasta que llegue el valor del servidor vía ApplyServerProgress().
         /// </summary>
+        public void BindToUser(string userId)
+        {
+            if (string.IsNullOrEmpty(userId))
+            {
+                Debug.LogWarning("[LevelManager] BindToUser: userId vacío.");
+                return;
+            }
+
+            _activeKey    = KEY_PREFIX + userId;
+            _usuarioActivo = userId.Substring(0, Mathf.Min(8, userId.Length)) + "…";
+            RefreshDebugFields();
+            Debug.Log($"[LevelManager] Progreso enlazado al usuario → " +
+                      $"clave='{_activeKey}', nivel local={CurrentLevelNumber}");
+        }
+
+        /// <summary>
+        /// Aplica el nivel que llegó del servidor (Supabase profiles.max_unlocked_level).
+        /// Solo sobreescribe si el valor del servidor es mayor que el local,
+        /// para no retroceder progreso ante fallos de sincronización.
+        /// </summary>
+        public void ApplyServerProgress(int serverLevelIndex)
+        {
+            int clamped = Mathf.Clamp(serverLevelIndex, 0, TotalLevels - 1);
+
+            if (clamped > CurrentLevelIndex)
+            {
+                CurrentLevelIndex = clamped;
+                Debug.Log($"[LevelManager] Progreso del servidor aplicado → " +
+                          $"Nivel {CurrentLevelNumber}");
+            }
+            else
+            {
+                Debug.Log($"[LevelManager] Progreso local ({CurrentLevelNumber}) ≥ " +
+                          $"servidor ({clamped + 1}). Se mantiene el local.");
+            }
+
+            RefreshDebugFields();
+        }
+
+        /// <summary>
+        /// Desenlaza el usuario (al hacer logout).
+        /// Vuelve a la clave anónima, que empieza en 0.
+        /// </summary>
+        public void UnbindUser()
+        {
+            _activeKey    = ANON_KEY;
+            _usuarioActivo = "anónimo";
+
+            // Limpiar la clave anónima para que el siguiente usuario empiece limpio
+            PlayerPrefs.DeleteKey(ANON_KEY);
+            PlayerPrefs.Save();
+
+            RefreshDebugFields();
+            Debug.Log("[LevelManager] Usuario desenlazado. Progreso en 0.");
+        }
+
+        // ── EnsureExists ──────────────────────────────────────
         public static LevelManager EnsureExists()
         {
             if (Instance != null) return Instance;
-
-            Debug.LogWarning("[LevelManager] No se encontró instancia en escena. " +
-                             "Creando una temporal. COLOCA LevelManager en LoginScene.");
-            var go = new GameObject("[LevelManager — AUTO-CREADO]");
-            go.AddComponent<LevelManager>();   // Awake asigna Instance
+            Debug.LogWarning("[LevelManager] Instancia no encontrada. Creando temporal.");
+            var go = new GameObject("[LevelManager-Auto]");
+            go.AddComponent<LevelManager>();
             return Instance;
         }
 
-        // ── API pública ───────────────────────────────────────
+        // ── API de navegación ─────────────────────────────────
 
         public ProceduralLevelConfig GetConfig(int levelIndex)
         {
             string name = $"Level{(levelIndex + 1):D2}";
             var cfg = Resources.Load<ProceduralLevelConfig>($"LevelConfigs/{name}");
             if (cfg == null)
-                Debug.LogWarning($"[LevelManager] ⚠ No encontrado: Resources/LevelConfigs/{name}.asset");
+                Debug.LogWarning($"[LevelManager] No encontrado: LevelConfigs/{name}.asset");
             return cfg;
         }
 
         public ProceduralLevelConfig CurrentConfig => GetConfig(CurrentLevelIndex);
 
-        public void LoadMiniGame()
+        public bool IsPortalTransition => _isPortalTransition;
+
+        public void LoadMiniGame(bool asPortalTransition = false)
         {
-            Debug.Log($"[LevelManager] Nivel {CurrentLevelNumber} superado → MiniGameScene");
+            _isPortalTransition = asPortalTransition;
             SceneManager.LoadScene("MiniGameScene");
+        }
+
+        public void ReturnFromPortal()
+        {
+            _isPortalTransition = false;
+            SceneManager.LoadScene("GameplayScene");
         }
 
         public void AdvanceLevel()
@@ -144,7 +216,6 @@ namespace Celeris.Core
             int next = CurrentLevelIndex + 1;
             if (next >= TotalLevels)
             {
-                Debug.Log("[LevelManager] ¡Todos los niveles completados! → MainMenuScene");
                 CurrentLevelIndex = 0;
                 RefreshDebugFields();
                 SceneManager.LoadScene("MainMenuScene");
@@ -160,7 +231,6 @@ namespace Celeris.Core
 
         public void RetryCurrentLevel()
         {
-            Debug.Log($"[LevelManager] Reintentando nivel {CurrentLevelNumber}");
             SceneManager.LoadScene("GameplayScene");
         }
 
@@ -171,13 +241,10 @@ namespace Celeris.Core
             Debug.Log("[LevelManager] Progreso reiniciado al Nivel 1.");
         }
 
-        /// <summary>Salta directamente a un nivel específico (base-1). Útil desde LevelSelectScene.</summary>
         public void GoToLevel(int levelNumber)
         {
-            int idx = Mathf.Clamp(levelNumber - 1, 0, TotalLevels - 1);
-            CurrentLevelIndex = idx;
+            CurrentLevelIndex = Mathf.Clamp(levelNumber - 1, 0, TotalLevels - 1);
             RefreshDebugFields();
-            Debug.Log($"[LevelManager] Saltando al nivel {CurrentLevelNumber}");
             SceneManager.LoadScene("GameplayScene");
         }
     }

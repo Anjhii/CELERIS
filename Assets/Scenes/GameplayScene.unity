@@ -179,7 +179,6 @@ MonoBehaviour:
   fillImage: {fileID: 1644863981}
   colorNormal: {r: 0, g: 1, b: 0, a: 1}
   colorDraining: {r: 1, g: 0, b: 0, a: 1}
-  colorReadyToAdvance: {r: 0, g: 0.85, b: 1, a: 1}
   colorWarning: {r: 1, g: 0.55, b: 0, a: 1}
   warningRatio: 0.3
 --- !u!114 &130008293
@@ -385,7 +384,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   player: {fileID: 645165031}
   smoothTime: 0.1
-  rotationSpeed: 5
 --- !u!1 &470269338
 GameObject:
   m_ObjectHideFlags: 0
@@ -611,13 +609,16 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   generator: {fileID: 823865156}
-  moveDuration: 0.2
-  idleDuration: 0.15
-  startBattery: 20
+  NormalMoveDuration: 0.25
+  batteryLimit: 100
+  batteryDrainPerStep: 5
+  ChargeMinSpeedToMove: 0.05
+  ChargeTapImpulse: 0.2
+  ChargeFrictionDecay: 0.25
+  ChargeEscapeSpeed: 0.85
+  ChargeDrainRate: 8
   batteryPenalty: 5
   resetMoveDuration: 0.6
-  chargeDrainRate: 3
-  chargeClickBoost: 1
 --- !u!136 &645165028
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -773,9 +774,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c309b336cb4c67e478e88c0b37680227, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  generator: {fileID: 0}
-  droide: {fileID: 0}
+  generator: {fileID: 823865156}
+  droide: {fileID: 645165027}
   victoryDelay: 1
+  miniGameSceneName: MiniGameScene
 --- !u!1 &841310304
 GameObject:
   m_ObjectHideFlags: 0
@@ -1060,14 +1062,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   droide: {fileID: 645165027}
-  shortTapMax: 0.3
-  holdMin: 0.5
+  holdThreshold: 0.45
   pulseCooldown: 3
-  maxQueueSize: 2
   pulseButtonImage: {fileID: 0}
-  colorReady: {r: 0.2, g: 0.7, b: 1, a: 0.85}
-  colorEnqueued: {r: 0.3, g: 0.9, b: 0.3, a: 0.85}
-  colorFull: {r: 0.45, g: 0.45, b: 0.45, a: 0.55}
+  colorPulseReady: {r: 0.2, g: 0.7, b: 1, a: 0.85}
+  colorPulseCooldown: {r: 0.45, g: 0.45, b: 0.45, a: 0.55}
 --- !u!114 &1198390658
 MonoBehaviour:
   m_ObjectHideFlags: 0
