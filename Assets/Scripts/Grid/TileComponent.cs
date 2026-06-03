@@ -1,4 +1,3 @@
-using Celeris.Core;
 using Celeris.Data;
 using System.Collections;
 using UnityEngine;
@@ -16,11 +15,15 @@ namespace Celeris.Grid
         [Header("Estado interactivo")]
         public bool isActive = true;
 
-        [Header("Modelos especiales")]
+        [Header("Modelos especiales (asignados por TileModelRegistry)")]
         public static GameObject ArrowPrefab;
         public static GameObject LaserPrefab;
         public static GameObject ChargePrefab;
         public static GameObject GoalPrefab;
+
+        [Header("Portal — tile que activa el minijuego")]
+        [Tooltip("Color del tile portal (identificador visual del minijuego)")]
+        public Color portalColor = new Color(0.58f, 0.08f, 1.00f);
 
         [HideInInspector] public Vector2Int gridCoord;
 
@@ -31,6 +34,7 @@ namespace Celeris.Grid
         private void Awake()
         {
             _rend = GetComponentInChildren<Renderer>();
+            Refresh();
         }
 
         public void RotateArrow90Degrees()
@@ -44,18 +48,13 @@ namespace Celeris.Grid
         {
             if (tileType != TileType.LaserTile) return;
             isActive = !isActive;
-            ApplyVisual();
+            Refresh();
         }
 
-        public Vector2Int GetExitDirection(Vector2Int currentDir)
-        {
-            return tileType switch
-            {
-                TileType.ArrowTile => DirectionToVector(arrowDirection),
-                TileType.VoidTile  => Vector2Int.zero,
-                _                  => currentDir
-            };
-        }
+        public Vector2Int GetExitDirection(Vector2Int currentDir) =>
+            tileType == TileType.ArrowTile
+                ? DirectionToVector(arrowDirection)
+                : currentDir;
 
         public void Refresh()
         {
@@ -66,6 +65,12 @@ namespace Celeris.Grid
         {
             SpawnSpecialModel();
             UpdateLasers();
+
+            if (_rend == null) _rend = GetComponentInChildren<Renderer>();
+            if (_rend == null) return;
+
+            if (tileType == TileType.PortalTile)
+                _rend.material.color = portalColor;
         }
 
         private void UpdateLasers()
@@ -100,41 +105,27 @@ namespace Celeris.Grid
             _specialModel = Instantiate(prefab, transform);
             _specialModel.transform.localPosition = Vector3.zero;
 
-            if (tileType == TileType.LaserTile || tileType == TileType.GoalTile)
+            float angle = tileType switch
             {
-                float angle = arrowDirection switch
+                TileType.LaserTile or TileType.GoalTile => arrowDirection switch
                 {
                     MoveDirection.North => 180f,
                     MoveDirection.South => 0f,
                     MoveDirection.East  => 270f,
                     MoveDirection.West  => 90f,
                     _                   => 0f
-                };
-                _specialModel.transform.localRotation = Quaternion.Euler(0f, angle, 0f);
-            }
-            else if (tileType == TileType.ArrowTile)
-            {
-                float angle = arrowDirection switch
+                },
+                TileType.ArrowTile => arrowDirection switch
                 {
                     MoveDirection.North => 0f,
                     MoveDirection.East  => 90f,
                     MoveDirection.South => 180f,
                     MoveDirection.West  => 270f,
                     _                   => 0f
-                };
-                _specialModel.transform.localRotation = Quaternion.Euler(0f, angle, 0f);
-            }
-            else
-            {
-                _specialModel.transform.localRotation = Quaternion.identity;
-            }
-
-            if (tileType == TileType.ChargeTile)
-            {
-                var effect = _specialModel.GetComponent<EnergiaTileEffect>();
-                if (effect != null)
-                    effect.StopEffect();
-            }
+                },
+                _ => 0f
+            };
+            _specialModel.transform.localRotation = Quaternion.Euler(0f, angle, 0f);
         }
 
         public void PulseEmission(float duration = 0.3f)
@@ -173,14 +164,13 @@ namespace Celeris.Grid
             mat.SetColor(EmissionColorID, baseEmission);
         }
 
-        public static Vector2Int DirectionToVector(MoveDirection dir) =>
-            dir switch
-            {
-                MoveDirection.North => Vector2Int.up,
-                MoveDirection.South => Vector2Int.down,
-                MoveDirection.East  => Vector2Int.right,
-                MoveDirection.West  => Vector2Int.left,
-                _                   => Vector2Int.up
-            };
+        public static Vector2Int DirectionToVector(MoveDirection dir) => dir switch
+        {
+            MoveDirection.North => Vector2Int.up,
+            MoveDirection.South => Vector2Int.down,
+            MoveDirection.East  => Vector2Int.right,
+            MoveDirection.West  => Vector2Int.left,
+            _                   => Vector2Int.up
+        };
     }
 }

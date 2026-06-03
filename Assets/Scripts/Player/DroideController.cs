@@ -40,7 +40,7 @@ using System;
 using Celeris.Core;
 using Celeris.Data;
 using Celeris.Grid;
-using Celeris.Core;
+using Celeris.Input;
 using UnityEngine;
 
 namespace Celeris.Player
@@ -57,24 +57,55 @@ namespace Celeris.Player
         public float speed = 5f;
 
         [Header("Batería")]
-        [Tooltip("Valor inicial Y máximo. El 100% de carga equivale a este valor.")]
-        public int startBattery        = 20;
+        public int   batteryLimit        = 100;
+        [Tooltip("OBSOLETO — no se usa. El drenaje es responsabilidad de FrictionMovementState (ChargeTile) y TriggerLaserReset (LaserTile). Mantener a 0.")]
+        public int   batteryDrainPerTile = 0;
 
-        [Header("Fallo — Láser / Sin batería")]
-        [Tooltip("Batería que se resta al activarse ResetLevel")]
-        public int   batteryPenalty    = 5;
-        [Tooltip("Duración de la animación de vuelta al inicio tras fallo")]
-        public float resetMoveDuration = 0.60f;
+        [Header("ChargeTile — Imán")]
+        [Tooltip("Multiplicador de velocidad mientras IsStuckInCharge (0.1 = 10%)")]
+        [Range(0.01f, 0.3f)]
+        public float chargeSpeedMultiplier = 0.10f;
+        [Tooltip("Batería drenada por segundo dentro del ChargeTile (usada por FrictionMovementState)")]
+        public float chargeDrainRate       = 10f;
+        [Tooltip("Número de taps necesarios para escapar del ChargeTile (legacy)")]
+        public int   tapEscapeThreshold    = 8;
+
+        [Header("ChargeTile — Fricción (state machine)")]
+        [Tooltip("Velocidad mínima normalizada para que el Droide se mueva [0-1]")]
+        [Range(0f, 1f)]
+        public float chargeMinSpeedToMove  = 0.10f;
+        [Tooltip("Impulso de velocidad por tap [0-1]")]
+        [Range(0f, 1f)]
+        public float chargeTapImpulse      = 0.25f;
+        [Tooltip("Tasa de pérdida de velocidad por segundo")]
+        [Range(0f, 5f)]
+        public float chargeFrictionDecay   = 0.50f;
+        [Tooltip("Velocidad mínima sostenida para escapar del ChargeTile [0-1]")]
+        [Range(0f, 1f)]
+        public float chargeEscapeSpeed     = 0.80f;
+
+        [Header("Movimiento — Estado Normal")]
+        [Tooltip("Duración base de un paso en segundos")]
+        public float normalMoveDuration    = 0.20f;
+
+        [Header("Fallo por Láser")]
+        [Tooltip("Batería que se resta al impacto de láser")]
+        public int   batteryPenalty        = 20;
+        [Tooltip("Fuerza del impulso de retroceso al recibir un impacto de láser")]
+        public float knockbackForce        = 8f;
+        [Tooltip("Segundos de penalización antes de volver al inicio (obsoleto — mantenido por compatibilidad)")]
+        public float resetDelay            = 0.8f;
+
+        [Header("Pulso Eléctrico")]
+        public float pulseCooldown = 3f;
 
         [Header("Efectos")]
         public LightPulse lightPulse;
         public ShockwaveEffect shockwave;
 
-        [Header("Tile de Carga (Stress Test)")]
-        [Tooltip("Unidades de batería drenadas por segundo mientras se está en ChargeTile")]
-        public float chargeDrainRate   = 3f;
+        [Header("Tile de Carga (Tap rápido)")]
         [Tooltip("Batería que suma cada tap del jugador durante la carga")]
-        public int   chargeClickBoost  = 1;
+        public int chargeClickBoost = 1;
 
         // ── Estado público ────────────────────────────────────
         public DroideState State          { get; private set; } = DroideState.IdleBetweenTiles;
@@ -419,6 +450,10 @@ namespace Celeris.Player
                     // ya está en estado Charging y la animación no debe reiniciarse.
                     if (_lastProcessedTileType != TileType.ChargeTile)
                         SetScanAnimation();
+
+                    // Activar feedback visual del ChargeTile
+                    var chargeEffect = tile.GetComponentInChildren<EnergiaTileEffect>();
+                    chargeEffect?.StartDraining();
                     break;
 
                 // GoalTile: requiere las 3 terminales hackeadas
@@ -439,22 +474,18 @@ namespace Celeris.Player
                     }
                     break;
 
-            var tile = generator.GetTile(GridCoord);
-            var effect = tile?.GetComponentInChildren<EnergiaTileEffect>();
-            effect?.StartDraining();
-
-            _drainCoroutine = StartCoroutine(BatteryDrainRoutine());
-            yield return new WaitUntil(() => Battery >= startBattery || Battery <= 0);
-            StopDrain();
-
-            effect?.StopEffect();
-
-            if (Battery >= startBattery)
-                yield return StartCoroutine(ReadyToAdvanceRoutine());
-            else
-            {
-                LastDeathCause = DeathCause.Battery;
-                yield return StartCoroutine(ResetLevel());
+                // Portal: guardar estado y notificar a GameFlowManager
+                case TileType.PortalTile:
+                    var portalComp = tile.GetComponent<PortalTileComponent>();
+                    if (portalComp == null || !portalComp.IsCompleted)
+                    {
+                        _rb.velocity = Vector3.zero;
+                        SetState(DroideState.AtPortal);
+                        OnPortalEntered?.Invoke(tile, _direction);
+                        // GameFlowManager recibe OnPortalEntered, pausa el juego y carga la escena.
+                        // Al terminar, GameFlowManager llama droide.RestoreFromPortal().
+                    }
+                    break;
             }
         }
 
@@ -489,26 +520,9 @@ namespace Celeris.Player
         // ── Muerte final ──────────────────────────────────────
         private void TriggerDeath()
         {
-            float accumulated = 0f;
-
-            var tile   = generator.GetTile(GridCoord);
-            var effect = tile?.GetComponentInChildren<EnergiaTileEffect>();
-
-            while (_isCharging && Battery > 0)
-            {
-                accumulated += chargeDrainRate * Time.deltaTime;
-                if (accumulated >= 1f)
-                {
-                    int drain   = Mathf.FloorToInt(accumulated);
-                    accumulated -= drain;
-                    Battery     = Mathf.Max(0, Battery - drain);
-                    OnBatteryChanged?.Invoke(Battery);
-
-                    float ratio = Battery / (float)MaxBattery;
-                    effect?.UpdateBatteryColor(ratio);
-                }
-                yield return null;
-            }
+            _rb.velocity     = Vector3.zero;
+            _isStuckInCharge = false;
+            SetState(DroideState.Dead);
         }
 
         // ── Portal: retorno desde minijuego ───────────────────
@@ -607,9 +621,31 @@ namespace Celeris.Player
         {
             Battery = Mathf.Max(0, Battery - amount);
             OnBatteryChanged?.Invoke(Battery);
+
+            float ratio = Battery / (float)MaxBattery;
+            var tile    = generator.GetTile(GridCoord);
+            var effect  = tile?.GetComponentInChildren<EnergiaTileEffect>();
+            effect?.UpdateBatteryColor(ratio);
         }
 
-        // ── API pública ───────────────────────────────────────
+        /// <summary>Mata al droide con la causa indicada (usada por FrictionMovementState).</summary>
+        public void ForceKill(DeathCause cause)
+        {
+            LastDeathCause = cause;
+            TriggerDeath();
+        }
+
+        /// <summary>Suma batería por tap en ChargeTile con feedback visual.</summary>
+        public void RegisterChargeClick()
+        {
+            Battery = Mathf.Min(batteryLimit, Battery + chargeClickBoost);
+            OnBatteryChanged?.Invoke(Battery);
+
+            var tile   = generator.GetTile(GridCoord);
+            var effect = tile?.GetComponentInChildren<EnergiaTileEffect>();
+            effect?.TriggerTapBurst();
+        }
+
         public void TriggerLightPulse()
         {
             if (lightPulse != null) lightPulse.Pulse();
@@ -626,18 +662,11 @@ namespace Celeris.Player
                 GridCoord + new Vector2Int( 0,  1),
                 GridCoord + new Vector2Int( 0, -1)
             };
-
             foreach (var coord in neighbors)
             {
                 var tile = generator.GetTile(coord);
                 tile?.PulseEmission();
             }
-        }
-
-        public void TriggerElectricPulse()
-        {
-            LastDeathCause = cause;
-            TriggerDeath();
         }
 
         /// <summary>
@@ -662,13 +691,13 @@ namespace Celeris.Player
 
         public void TriggerElectricPulse()
         {
-            if (State != DroideState.Charging) return;
-            Battery = Mathf.Min(startBattery, Battery + chargeClickBoost);
-            OnBatteryChanged?.Invoke(Battery);
-
-            var tile   = generator.GetTile(GridCoord);
-            var effect = tile?.GetComponentInChildren<EnergiaTileEffect>();
-            effect?.TriggerTapBurst();
+            TriggerLightPulse();
+            for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                if (Mathf.Abs(dx) + Mathf.Abs(dy) > 1) continue;
+                ToggleLaserAt(GridCoord + new Vector2Int(dx, dy));
+            }
         }
 
         public void TryRotateArrow()
@@ -676,9 +705,13 @@ namespace Celeris.Player
             var tile = generator.GetTile(GridCoord);
             if (tile == null || tile.tileType != TileType.ArrowTile) return;
 
+            // No permitir rotación si haría que la flecha apunte hacia atrás
+            var nextDir = (MoveDirection)(((int)tile.arrowDirection + 1) % 4);
+            var nextVec = TileComponent.DirectionToVector(nextDir);
+            if (nextVec == -_direction) return;
+
             tile.RotateArrow90Degrees();
             ApplyArrowDirection(tile);
-            // Sin cambio de estado: el droide sigue en Moving (isMoving no se toca)
         }
 
         /// <summary>
@@ -696,6 +729,9 @@ namespace Celeris.Player
         {
             Vector2Int d    = TileComponent.DirectionToVector(tile.arrowDirection);
             Vector3    dir3 = new Vector3(d.x, 0f, d.y).normalized;
+
+            // Seguridad anti-loop: si la flecha apunta al tile anterior, ignorarla
+            if (GridCoord + d == _lastProcessedCoord) return;
 
             // ── Axis-snap al centro del tile ──────────────────
             // Alinear el eje perpendicular a la nueva dirección para eliminar
