@@ -1,19 +1,12 @@
-// ============================================================
-// TileComponent.cs  |  Assets/Scripts/Grid/
-// Un componente por GameObject de tile. Sin GetComponent
-// en runtime: el generador cachea referencias al nacer.
-//
-// ESCENA: Se añade automáticamente a cada tile instanciado
-//         por ProceduralGridGenerator. No crear a mano.
-// ============================================================
+using Celeris.Core;
 using Celeris.Data;
+using System.Collections;
 using UnityEngine;
 
 namespace Celeris.Grid
 {
     public class TileComponent : MonoBehaviour
     {
-        // ── Datos ────────────────────────────────────────────
         [Header("Tipo")]
         public TileType tileType = TileType.BaseTile;
 
@@ -21,45 +14,32 @@ namespace Celeris.Grid
         public MoveDirection arrowDirection = MoveDirection.North;
 
         [Header("Estado interactivo")]
-        public bool isActive = true;   // Laser ON-OFF (Resonance eliminada en v2)
+        public bool isActive = true;
 
-        // Coordenada lógica en el grid (asignada por el generador)
+        [Header("Modelos especiales")]
+        public static GameObject ArrowPrefab;
+        public static GameObject LaserPrefab;
+        public static GameObject ChargePrefab;
+        public static GameObject GoalPrefab;
+
         [HideInInspector] public Vector2Int gridCoord;
 
-        // Referencia al renderer para feedback visual placeholder
         private Renderer _rend;
+        private GameObject _specialModel;
+        private static readonly int EmissionColorID = Shader.PropertyToID("_EmissionColor");
 
-        // Colores placeholder por tipo
-        private static readonly Color[] TypeColors =
-        {
-            new Color(0.25f, 0.25f, 0.25f), // BaseTile      — gris oscuro
-            new Color(0.20f, 0.60f, 1.00f), // ArrowTile     — azul
-            new Color(0.80f, 0.20f, 0.80f), // ResonanceTile — magenta
-            new Color(1.00f, 0.40f, 0.00f), // LaserTile     — naranja
-            new Color(0.20f, 0.90f, 0.40f), // ChargeTile    — verde
-            Color.black,                    // VoidTile      — negro
-            new Color(1.00f, 0.90f, 0.10f)  // GoalTile      — amarillo
-        };
-
-        // ── Init ─────────────────────────────────────────────
         private void Awake()
         {
             _rend = GetComponentInChildren<Renderer>();
-            ApplyVisual();
         }
 
-        // ── Acciones públicas ─────────────────────────────────
-
-        /// <summary>Rota la dirección de la flecha 90° horario.</summary>
         public void RotateArrow90Degrees()
         {
             if (tileType != TileType.ArrowTile) return;
             arrowDirection = (MoveDirection)(((int)arrowDirection + 1) % 4);
-            // Rota el modelo visualmente (eje Y, espacio local)
             transform.Rotate(Vector3.up, 90f, Space.World);
         }
 
-        /// <summary>Alterna estado ON/OFF del Laser.</summary>
         public void ToggleLaser()
         {
             if (tileType != TileType.LaserTile) return;
@@ -67,37 +47,131 @@ namespace Celeris.Grid
             ApplyVisual();
         }
 
-        // ── Dirección de salida para el Droide ───────────────
-        /// <summary>Devuelve el vector de movimiento según el tipo de tile.</summary>
         public Vector2Int GetExitDirection(Vector2Int currentDir)
         {
             return tileType switch
             {
                 TileType.ArrowTile => DirectionToVector(arrowDirection),
                 TileType.VoidTile  => Vector2Int.zero,
-                _                  => currentDir   // continúa recto
+                _                  => currentDir
             };
         }
 
-        // ── Helpers ───────────────────────────────────────────
-
-        /// <summary>
-        /// Aplica el color del tipo actual al Renderer.
-        /// Llamar desde el generador tras asignar tileType.
-        /// </summary>
         public void Refresh()
         {
-            if (_rend == null)
-                _rend = GetComponentInChildren<Renderer>();
-            if (_rend == null) return;
-            int idx = Mathf.Clamp((int)tileType, 0, TypeColors.Length - 1);
-            Color c = TypeColors[idx];
-            if (!isActive) c *= 0.4f;
-            _rend.material.color = c;
+            ApplyVisual();
         }
 
-        // Mantener privado para Awake (evita duplicar lógica)
-        private void ApplyVisual() => Refresh();
+        private void ApplyVisual()
+        {
+            SpawnSpecialModel();
+            UpdateLasers();
+        }
+
+        private void UpdateLasers()
+        {
+            if (tileType != TileType.LaserTile || _specialModel == null) return;
+
+            Transform lasersGroup = _specialModel.transform.Find("Lasers");
+            if (lasersGroup == null) return;
+
+            lasersGroup.gameObject.SetActive(isActive);
+        }
+
+        private void SpawnSpecialModel()
+        {
+            if (_specialModel != null)
+            {
+                Destroy(_specialModel);
+                _specialModel = null;
+            }
+
+            GameObject prefab = tileType switch
+            {
+                TileType.ArrowTile  => ArrowPrefab,
+                TileType.LaserTile  => LaserPrefab,
+                TileType.ChargeTile => ChargePrefab,
+                TileType.GoalTile   => GoalPrefab,
+                _                   => null
+            };
+
+            if (prefab == null) return;
+
+            _specialModel = Instantiate(prefab, transform);
+            _specialModel.transform.localPosition = Vector3.zero;
+
+            if (tileType == TileType.LaserTile || tileType == TileType.GoalTile)
+            {
+                float angle = arrowDirection switch
+                {
+                    MoveDirection.North => 180f,
+                    MoveDirection.South => 0f,
+                    MoveDirection.East  => 270f,
+                    MoveDirection.West  => 90f,
+                    _                   => 0f
+                };
+                _specialModel.transform.localRotation = Quaternion.Euler(0f, angle, 0f);
+            }
+            else if (tileType == TileType.ArrowTile)
+            {
+                float angle = arrowDirection switch
+                {
+                    MoveDirection.North => 0f,
+                    MoveDirection.East  => 90f,
+                    MoveDirection.South => 180f,
+                    MoveDirection.West  => 270f,
+                    _                   => 0f
+                };
+                _specialModel.transform.localRotation = Quaternion.Euler(0f, angle, 0f);
+            }
+            else
+            {
+                _specialModel.transform.localRotation = Quaternion.identity;
+            }
+
+            if (tileType == TileType.ChargeTile)
+            {
+                var effect = _specialModel.GetComponent<EnergiaTileEffect>();
+                if (effect != null)
+                    effect.StopEffect();
+            }
+        }
+
+        public void PulseEmission(float duration = 0.3f)
+        {
+            if (_rend == null) return;
+            StartCoroutine(EmissionPulseRoutine(duration));
+        }
+
+        private IEnumerator EmissionPulseRoutine(float duration)
+        {
+            var mat = _rend.material;
+
+            Color baseEmission = mat.GetColor(EmissionColorID);
+            Color peakEmission = baseEmission + new Color(0.4f, 0.5f, 0.6f) * 2f;
+
+            float elapsed = 0f;
+            float half    = duration * 0.5f;
+
+            while (elapsed < half)
+            {
+                elapsed += Time.deltaTime;
+                float t  = Mathf.Clamp01(elapsed / half);
+                mat.SetColor(EmissionColorID, Color.Lerp(baseEmission, peakEmission, t));
+                yield return null;
+            }
+
+            elapsed = 0f;
+            while (elapsed < half)
+            {
+                elapsed += Time.deltaTime;
+                float t  = Mathf.Clamp01(elapsed / half);
+                mat.SetColor(EmissionColorID, Color.Lerp(peakEmission, baseEmission, t));
+                yield return null;
+            }
+
+            mat.SetColor(EmissionColorID, baseEmission);
+        }
 
         public static Vector2Int DirectionToVector(MoveDirection dir) =>
             dir switch

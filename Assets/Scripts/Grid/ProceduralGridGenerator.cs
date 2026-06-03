@@ -60,6 +60,7 @@ namespace Celeris.Grid
         // ── Acceso público ────────────────────────────────────
         public IReadOnlyDictionary<Vector2Int, TileComponent> TileMap => _tileMap;
         public Vector3 StartWorldPos { get; private set; }
+        public event Action OnGridStarted;
         public event Action OnGridReady;
 
         // ── Privado ───────────────────────────────────────────
@@ -88,6 +89,8 @@ namespace Celeris.Grid
 
             var path = GeneratePath(rng);
             SpawnPathTiles(path);
+
+            OnGridStarted?.Invoke();
 
             yield return StartCoroutine(PlayWaveAnimation(path));
 

@@ -161,11 +161,14 @@ namespace Celeris.Input
             if (droide.State == DroideState.Charging)
             {
                 droide.RegisterChargeClick();
-                return;   // durante la carga no se encolan pulsos de rango 1
+                droide.TriggerLightPulse();
+                return;
             }
 
-            // Movimiento normal: encolar pulso SOLO si hay láser adyacente (rango 1).
-            // Si no hay objetivo, el tap se descarta silenciosamente.
+            // ── Pulso de luz en CADA tap ──────────────────────────
+            droide.TriggerLightPulse();
+
+            // ── Pulso eléctrico solo si hay laser adyacente ───────
             if (droide.State != DroideState.Dead &&
                 droide.State != DroideState.Victory &&
                 droide.HasLaserAtRangeOne())

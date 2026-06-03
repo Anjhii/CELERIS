@@ -1,6 +1,7 @@
 using System.Collections;
 using Celeris.Data;
 using Celeris.Grid;
+using Celeris.Core;
 using UnityEngine;
 
 namespace Celeris.Player
@@ -24,6 +25,10 @@ namespace Celeris.Player
         public int   batteryPenalty    = 5;
         [Tooltip("Duración de la animación de vuelta al inicio tras fallo")]
         public float resetMoveDuration = 0.60f;
+
+        [Header("Efectos")]
+        public LightPulse lightPulse;
+        public ShockwaveEffect shockwave;
 
         [Header("Tile de Carga (Stress Test)")]
         [Tooltip("Unidades de batería drenadas por segundo mientras se está en ChargeTile")]
@@ -180,9 +185,15 @@ namespace Celeris.Player
             _running    = false;
             _isCharging = true;
 
+            var tile = generator.GetTile(GridCoord);
+            var effect = tile?.GetComponentInChildren<EnergiaTileEffect>();
+            effect?.StartDraining();
+
             _drainCoroutine = StartCoroutine(BatteryDrainRoutine());
             yield return new WaitUntil(() => Battery >= startBattery || Battery <= 0);
             StopDrain();
+
+            effect?.StopEffect();
 
             if (Battery >= startBattery)
                 yield return StartCoroutine(ReadyToAdvanceRoutine());
@@ -216,6 +227,10 @@ namespace Celeris.Player
         private IEnumerator BatteryDrainRoutine()
         {
             float accumulated = 0f;
+
+            var tile   = generator.GetTile(GridCoord);
+            var effect = tile?.GetComponentInChildren<EnergiaTileEffect>();
+
             while (_isCharging && Battery > 0)
             {
                 accumulated += chargeDrainRate * Time.deltaTime;
@@ -225,6 +240,9 @@ namespace Celeris.Player
                     accumulated -= drain;
                     Battery     = Mathf.Max(0, Battery - drain);
                     OnBatteryChanged?.Invoke(Battery);
+
+                    float ratio = Battery / (float)MaxBattery;
+                    effect?.UpdateBatteryColor(ratio);
                 }
                 yield return null;
             }
@@ -279,6 +297,30 @@ namespace Celeris.Player
         }
 
         // ── API pública ───────────────────────────────────────
+        public void TriggerLightPulse()
+        {
+            if (lightPulse != null) lightPulse.Pulse();
+            if (shockwave != null) shockwave.Trigger();
+            PulseAdjacentTiles();
+        }
+
+        public void PulseAdjacentTiles()
+        {
+            Vector2Int[] neighbors =
+            {
+                GridCoord + new Vector2Int( 1,  0),
+                GridCoord + new Vector2Int(-1,  0),
+                GridCoord + new Vector2Int( 0,  1),
+                GridCoord + new Vector2Int( 0, -1)
+            };
+
+            foreach (var coord in neighbors)
+            {
+                var tile = generator.GetTile(coord);
+                tile?.PulseEmission();
+            }
+        }
+
         public void TriggerElectricPulse()
         {
             for (int dx = -1; dx <= 1; dx++)
@@ -306,6 +348,10 @@ namespace Celeris.Player
             if (State != DroideState.Charging) return;
             Battery = Mathf.Min(startBattery, Battery + chargeClickBoost);
             OnBatteryChanged?.Invoke(Battery);
+
+            var tile   = generator.GetTile(GridCoord);
+            var effect = tile?.GetComponentInChildren<EnergiaTileEffect>();
+            effect?.TriggerTapBurst();
         }
 
         public void RotateCurrentArrow()
