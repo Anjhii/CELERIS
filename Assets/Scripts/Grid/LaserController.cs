@@ -16,6 +16,7 @@
 // El controlador escribe en TileComponent.isActive y llama a
 // TileComponent.Refresh() para actualizar el color del tile.
 // ============================================================
+using System;
 using Celeris.Grid;
 using UnityEngine;
 
@@ -24,6 +25,15 @@ namespace Celeris.Grid
     [RequireComponent(typeof(TileComponent))]
     public class LaserController : MonoBehaviour
     {
+        // ── Evento estático ───────────────────────────────────
+        /// <summary>
+        /// Disparado cuando un láser transiciona de inactivo a activo.
+        /// Envía la coordenada de grid del tile para comparación eficiente.
+        /// DroideController suscribe para detectar láseres que se encienden
+        /// mientras el droide está parado sobre ellos.
+        /// </summary>
+        public static event Action<Vector2Int> OnLaserActivated;
+
         // ── Inspector / API de configuración ─────────────────
         [Header("Intervalos")]
         [Tooltip("Segundos que el láser permanece activo (peligroso)")]
@@ -59,8 +69,11 @@ namespace Celeris.Grid
             while (true)
             {
                 // Fase activa
+                bool wasInactive = !_tile.isActive;
                 _tile.isActive = true;
                 _tile.Refresh();
+                // Notificar solo cuando el láser pasa de inactivo a activo
+                if (wasInactive) OnLaserActivated?.Invoke(_tile.gridCoord);
                 yield return new WaitForSeconds(Mathf.Max(0.1f, activeDuration));
 
                 // Fase inactiva

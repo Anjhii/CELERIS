@@ -4,23 +4,21 @@
 // Estado de movimiento con fricción: Droide atrapado en ChargeTile.
 //
 // COMPORTAMIENTO:
-//   • Al entrar en el estado, el tile inicia el drenaje de batería.
-//   • La velocidad del Droide disminuye continuamente (fricción).
-//     Si el jugador no toca la pantalla, la velocidad llega a 0
-//     y el Droide se detiene completamente.
-//   • Cada tap (OnPressStart) inyecta un impulso de velocidad
-//     (simula esfuerzo para superar la fricción).
-//   • Cuanto más rápido y frecuente es el multi-tap, mayor es
-//     la velocidad mantenida.
-//   • Cuando la velocidad supera EscapeSpeed, el Droide sale del
-//     tile y vuelve a NormalMovementState.
-//   • Si la batería llega a 0 estando atrapado, el Droide muere.
+//   • Al entrar: SetIsStuckInCharge(true) → ApplyVelocity aplica
+//     chargeSpeedMultiplier; DroideController.TickChargeDrain() NO
+//     se llama (este estado gestiona el drenaje en Tick()).
+//   • La velocidad normalizada [0,1] decae cada frame (fricción).
+//     Si el jugador no toca, llega a 0 y el Droide se detiene.
+//   • Cada OnPressStart inyecta ChargeTapImpulse de velocidad.
+//   • Si _speed >= ChargeEscapeSpeed → TransitionToState(Normal).
+//   • Al salir: SetIsStuckInCharge(false) → ApplyVelocity vuelve
+//     a velocidad normal.
 //
-// PARÁMETROS CONFIGURABLES (ver DroideController Inspector):
-//   chargeEscapeSpeed    — velocidad mínima para escapar (0-1)
-//   chargeFrictionDecay  — tasa de pérdida de velocidad por segundo
-//   chargeTapImpulse     — impulso de velocidad por tap (0-1)
-//   chargeDrainRate      — batería drenada por segundo
+// CAMBIOS v2:
+//   • Enter() llama ctx.SetIsStuckInCharge(true).
+//   • Exit() llama ctx.SetIsStuckInCharge(false).
+//   Esto corrige el bug donde _isStuckInCharge quedaba false y
+//   ApplyVelocity() nunca aplicaba el chargeSpeedMultiplier.
 // ============================================================
 using Celeris.Data;
 using UnityEngine;
@@ -37,29 +35,49 @@ namespace Celeris.Player
         /// </summary>
         private float _speed = 1f;
 
+        // NOTA: Ya no se usa un acumulador de batería aquí porque
+        // DroideController.TickChargeDrain() fue eliminado del Update()
+        // para evitar doble drenaje. Este estado ES el responsable
+        // único del drenaje mientras el Droide está atrapado.
         private float _batteryAccumulator = 0f;
 
         // ── IPlayerState ─────────────────────────────────────
 
         public void Enter(DroideController ctx)
         {
-            _speed               = 1f;   // empieza a velocidad normal
-            _batteryAccumulator  = 0f;
+            _speed = 0f;   // droide parte desde quieto — requiere tap para arrancar
+
+            // Drenaje inmediato: acumulador pre-cargado para que el primer
+            // Tick() descuente energía sin esperar el primer segundo completo.
+            _batteryAccumulator = 1f;
+
+            // CRÍTICO: marcar al droide como atrapado.
+            // Esto permite que ApplyVelocity() aplique chargeSpeedMultiplier.
+            ctx.SetIsStuckInCharge(true);
 
             // La velocidad actual determina la duración del paso
             ApplySpeedToDuration(ctx);
 
-            // El Droide solo se mueve si la velocidad lo permite
-            ctx.SetShouldMove(_speed > ctx.ChargeMinSpeedToMove);
+            // Droide detenido al entrar; el primer tap inyecta el impulso inicial
+            ctx.SetShouldMove(false);
 
-            Debug.Log("[FrictionMovementState] Droide atrapado en ChargeTile.");
+            // NOTA: SetScanAnimation() ya NO se llama aquí.
+            // DroideController.ProcessTileEffect(ChargeTile) lo invoca, pero solo
+            // al pisar el PRIMER tile del clúster (_lastProcessedTileType != ChargeTile).
+            // Esto evita el tartamudeo visual al cruzar tiles consecutivos de fricción.
+
+            Debug.Log("[FrictionMovementState] Enter — Droide atrapado en ChargeTile.");
         }
 
         public void Exit(DroideController ctx)
         {
+            // CRÍTICO: liberar al droide antes de cambiar de estado.
+            // Garantiza que ApplyVelocity() vuelva a velocidad normal.
+            ctx.SetIsStuckInCharge(false);
+
             ctx.SetMoveDurationOverride(-1f);
             ctx.SetShouldMove(false);
-            Debug.Log("[FrictionMovementState] Droide escapó del ChargeTile.");
+            Debug.Log("[FrictionMovementState] Exit — Droide liberado del ChargeTile.");
         }
 
         public void OnPressStart(DroideController ctx)
@@ -83,10 +101,13 @@ namespace Celeris.Player
             float dt = Time.deltaTime;
 
             // ── Drenaje de batería ────────────────────────────
+            // Este estado es el ÚNICO responsable del drenaje en ChargeTile.
+            // DroideController.Update() NO llama TickChargeDrain() mientras
+            // este estado está activo (para evitar doble drenaje).
             _batteryAccumulator += ctx.ChargeDrainRate * dt;
             if (_batteryAccumulator >= 1f)
             {
-                int drain        = Mathf.FloorToInt(_batteryAccumulator);
+                int drain           = Mathf.FloorToInt(_batteryAccumulator);
                 _batteryAccumulator -= drain;
                 ctx.TakeBatteryHit(drain);
 
@@ -105,6 +126,7 @@ namespace Celeris.Player
             ctx.SetShouldMove(canMove);
 
             // ── Condición de escape: velocidad alta sostenida ─
+            // Exit() limpia SetIsStuckInCharge(false) automáticamente.
             if (_speed >= ctx.ChargeEscapeSpeed)
             {
                 ctx.TransitionToState(new NormalMovementState());
@@ -121,12 +143,12 @@ namespace Celeris.Player
         {
             if (_speed <= 0f)
             {
-                ctx.SetMoveDurationOverride(ctx.NormalMoveDuration * 4f);   // casi congelado
+                ctx.SetMoveDurationOverride(ctx.NormalMoveDuration * 4f);
                 return;
             }
-            // duration = baseDuration / speed  (speed=1 → base, speed=0.25 → 4x más lento)
             float duration = ctx.NormalMoveDuration / Mathf.Max(_speed, 0.05f);
-            ctx.SetMoveDurationOverride(Mathf.Clamp(duration, ctx.NormalMoveDuration, ctx.NormalMoveDuration * 8f));
+            ctx.SetMoveDurationOverride(
+                Mathf.Clamp(duration, ctx.NormalMoveDuration, ctx.NormalMoveDuration * 8f));
         }
     }
 }
