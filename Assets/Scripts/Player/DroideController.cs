@@ -726,6 +726,11 @@ namespace Celeris.Player
             Vector2Int d    = TileComponent.DirectionToVector(tile.arrowDirection);
             Vector3    dir3 = new Vector3(d.x, 0f, d.y).normalized;
 
+            // ── Anti-loop: ignorar giros de 180° ───────────────
+            // Si la flecha apunta en dirección contraria al movimiento,
+            // el robot se devolvería y quedaría atrapado entre dos tiles.
+            if (d == -_direction) return;
+
             // ── Axis-snap al centro del tile ──────────────────
             // Alinear el eje perpendicular a la nueva dirección para eliminar
             // la deriva lateral acumulada por el movimiento del Rigidbody.
