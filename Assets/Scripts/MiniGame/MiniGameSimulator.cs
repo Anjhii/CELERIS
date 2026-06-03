@@ -3,20 +3,19 @@
 //
 // ⚠️  ARCHIVO TEMPORAL — REEMPLAZAR CON MINIJUEGO REAL ⚠️
 //
-// SETUP EN MiniGameScene:
-//   1. Crear un GameObject vacío "MiniGameSimulator".
-//   2. Adjuntar este script.
-//   3. (Opcional) Crear un Canvas con dos TextMeshPro y
-//      arrastrarlos a levelCompleteText e instructionText.
+// v4 — Flujo dual con carga aditiva:
+//   • PORTAL: la GameplayScene sigue cargada (carga aditiva).
+//     CompleteMinigame() → GameFlowManager.OnPortalComplete()
+//     (descarga el minijuego, restaura Droide, reanuda juego).
+//   • VICTORIA: tap → LevelManager.AdvanceLevel().
 //
-// INTEGRACIÓN CON EL MINIJUEGO REAL (para tu compañero):
-//   Cuando la lógica del minijuego detecte que el jugador pasó
-//   el reto, llamar a:
-//       GetComponent<MiniGameSimulator>().AdvanceToNextLevel();
-//   o simplemente:
-//       LevelManager.EnsureExists().AdvanceLevel();
+// INTEGRACIÓN CON MINIJUEGO REAL:
+//   Llama a CompleteMinigame() cuando el jugador supere el reto.
+//   Para mostrar Game Over desde el minijuego:
+//   GameOverController.Show(GameOverReason.MinigameFail)
 // ============================================================
 using Celeris.Core;
+using Celeris.UI;
 using TMPro;
 using UnityEngine;
 
@@ -24,78 +23,91 @@ namespace Celeris.MiniGame
 {
     public class MiniGameSimulator : MonoBehaviour
     {
-        // ── Inspector ─────────────────────────────────────────
         [Header("UI (opcional)")]
-        public TMP_Text levelCompleteText;
+        public TMP_Text titleText;
         public TMP_Text instructionText;
 
         [Header("Timing")]
-        [Tooltip("Segundos antes de aceptar input (evita avance accidental)")]
         public float inputDelay = 0.8f;
 
-        // ── Privado ───────────────────────────────────────────
-        private bool _canAdvance = false;
+        private bool _canAdvance    = false;
+        private bool _isPortalRoute = false;
 
-        // ─────────────────────────────────────────────────────
         private void Start()
         {
-            // EnsureExists garantiza que LevelManager exista incluso si
-            // se llega a MiniGameScene sin haber pasado por LoginScene.
             var lm = LevelManager.EnsureExists();
+            _isPortalRoute = lm.IsPortalTransition;
 
-            int completedLevel = LevelManager.CurrentLevelNumber;
-            bool isLastLevel   = completedLevel >= lm.TotalLevels;
+            int lvl = LevelManager.CurrentLevelNumber;
 
-            if (levelCompleteText != null)
+            if (_isPortalRoute)
             {
-                levelCompleteText.text = isLastLevel
-                    ? "¡JUEGO COMPLETADO!\n¡Todos los niveles superados!"
-                    : $"¡NIVEL {completedLevel} COMPLETADO!";
+                if (titleText != null)      titleText.text = $"EVENTO ESPECIAL — Nivel {lvl}";
+                if (instructionText != null) instructionText.text = "Supera el reto para continuar";
             }
-
-            if (instructionText != null)
+            else
             {
-                instructionText.text = isLastLevel
-                    ? "Toca la pantalla para volver al menú"
-                    : $"Toca la pantalla para jugar el nivel {completedLevel + 1}";
+                bool isLast = lvl >= lm.TotalLevels;
+                if (titleText != null)
+                    titleText.text = isLast
+                        ? "¡JUEGO COMPLETADO!"
+                        : $"¡NIVEL {lvl} COMPLETADO!";
+                if (instructionText != null)
+                    instructionText.text = isLast
+                        ? "Toca para volver al menú"
+                        : $"Toca para el nivel {lvl + 1}";
             }
-
-            Debug.Log($"[MiniGameSimulator] Nivel {completedLevel} completado. " +
-                      $"Activando input en {inputDelay}s...");
 
             Invoke(nameof(EnableAdvance), inputDelay);
         }
 
-        private void EnableAdvance()
-        {
-            _canAdvance = true;
-            Debug.Log("[MiniGameSimulator] Listo — toca la pantalla o presiona una tecla.");
-        }
+        private void EnableAdvance() => _canAdvance = true;
 
         private void Update()
         {
             if (!_canAdvance) return;
 
-            bool keyPressed = UnityEngine.Input.anyKeyDown;
-            bool touchBegan = UnityEngine.Input.touchCount > 0 &&
-                              UnityEngine.Input.GetTouch(0).phase == TouchPhase.Began;
-
-            if (keyPressed || touchBegan)
-                AdvanceToNextLevel();
+            bool pressed = UnityEngine.Input.anyKeyDown ||
+                           (UnityEngine.Input.touchCount > 0 &&
+                            UnityEngine.Input.GetTouch(0).phase == TouchPhase.Began);
+            if (pressed) CompleteMinigame();
         }
 
-        // ── Punto de entrada público ──────────────────────────
-        /// <summary>
-        /// Llama a este método desde el minijuego real cuando el jugador
-        /// supera el reto. Avanza al siguiente nivel automáticamente.
-        /// </summary>
-        public void AdvanceToNextLevel()
+        /// <summary>Llamar cuando el jugador supera el reto del minijuego.</summary>
+        public void CompleteMinigame()
         {
             if (!_canAdvance) return;
             _canAdvance = false;
 
-            Debug.Log("[MiniGameSimulator] Avanzando al siguiente nivel...");
-            LevelManager.EnsureExists().AdvanceLevel();
+            if (_isPortalRoute)
+            {
+                // Notificar al GameFlowManager que descargue el minijuego y restaure el Droide
+                var gfm = FindObjectOfType<GameFlowManager>();
+                if (gfm != null)
+                {
+                    gfm.OnPortalComplete();
+                }
+                else
+                {
+                    // Fallback: si GameFlowManager no se encuentra, usar retorno estándar
+                    Debug.LogWarning("[MiniGameSimulator] GameFlowManager no encontrado. Usando fallback.");
+                    LevelManager.EnsureExists().ReturnFromPortal();
+                }
+            }
+            else
+            {
+                LevelManager.EnsureExists().AdvanceLevel();
+            }
         }
+
+        /// <summary>Forzar fallo del minijuego (llamar desde lógica del reto).</summary>
+        public void FailMinigame()
+        {
+            _canAdvance = false;
+            GameOverController.Show(GameOverReason.MinigameFail);
+        }
+
+        // Compatibilidad legacy
+        public void AdvanceToNextLevel() => CompleteMinigame();
     }
 }
