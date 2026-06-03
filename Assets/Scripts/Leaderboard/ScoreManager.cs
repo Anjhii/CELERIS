@@ -185,8 +185,36 @@ public class ScoreManager : MonoBehaviour
             PlayerPrefs.SetInt(KEY_HIGH_SCORE, (int)score);
             PlayerPrefs.SetInt(KEY_NEEDS_SYNC, 1);
             PlayerPrefs.SetInt(KEY_PENDING_SCORE, (int)score);
-            PlayerPrefs.Save();
+            // NOTA: PlayerPrefs.Save() removido del hot-path.
+            // Se persiste en OnApplicationPause / OnApplicationQuit.
             OnNewHighScore?.Invoke(score);
         }
     }
+
+    // ─── Persistencia segura (solo al minimizar o cerrar) ────────────────────────
+    // Elimina los tirones de disco durante el gameplay/minijuego.
+
+    private void OnApplicationPause(bool isPaused)
+    {
+        if (isPaused) PlayerPrefs.Save();
+    }
+
+    private void OnApplicationQuit()
+    {
+        PlayerPrefs.Save();
+    }
 }
+
+
+
+// B. Race Conditions (Condiciones de Carrera) en Singletons
+// Archivos a editar: Entorno de Unity (Editor) y opcionalmente ScoreManager.cs
+
+// Acción 1 (Recomendada - Editor): Ve a Edit > Project Settings > Script Execution Order. Añade los scripts AuthManager y SupabaseManager y asígnales un valor negativo (ej. -100) para que se ejecuten antes del Default Time. Asegúrate de que ScoreManager mantenga su tiempo por defecto o uno positivo para que siempre despierte después de la capa de red.
+
+// Acción 2 (Arquitectura en Código): En ScoreManager.cs, si tienes lógica de sincronización en el Start() o en las primeras validaciones, asegúrate de envolverlas en una comprobación segura (if (SupabaseManager.Instance != null)). Para mayor robustez a futuro, puedes crear un evento OnNetworkReady en el SupabaseManager al que el ScoreManager se suscriba antes de enviar datos.
+
+
+// Acción: Localiza el método EvaluateHighScore(...) y busca la línea donde llamas a PlayerPrefs.Save(). Bórrala de ese flujo de ejecución constante.
+
+// Lógica: Agrega los métodos OnApplicationPause(bool isPaused) y OnApplicationQuit() en este mismo script. Traslada la llamada de PlayerPrefs.Save() dentro de estos métodos. De esta forma, el motor guardará los datos acumulados en la RAM física hacia el disco de almacenamiento únicamente cuando el jugador minimice la aplicación o la cierre, eliminando los tirones durante el minijuego.

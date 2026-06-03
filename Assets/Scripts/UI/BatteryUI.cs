@@ -1,14 +1,12 @@
 // ============================================================
 // BatteryUI.cs  |  Assets/Scripts/UI/
 //
-// ESCENA: Crear en GameplayScene:
-//   Canvas
-//   └── BatterySlider  (GameObject con Slider + este script)
-//       └── Fill Area > Fill  ← arrastrar al campo fillImage
+// Barra de batería del Droide. La batería empieza en 100%.
 //
-// INSPECTOR: Asignar droide (DroideController) y los dos
-//            campos del Slider (slider + fillImage).
-//            Los colores tienen valores por defecto listos.
+// COLORES:
+//   Normal    (verde)  — movimiento estándar
+//   Draining  (rojo)   — dentro de ChargeTile (FrictionMovementState)
+//   Warning   (naranja)— batería baja (ratio < warningRatio)
 // ============================================================
 using Celeris.Data;
 using Celeris.Player;
@@ -19,7 +17,6 @@ namespace Celeris.UI
 {
     public class BatteryUI : MonoBehaviour
     {
-        // ── Inspector ─────────────────────────────────────────
         [Header("Referencias")]
         public DroideController droide;
         public Slider           slider;
@@ -27,14 +24,13 @@ namespace Celeris.UI
         public Image            fillImage;
 
         [Header("Colores")]
-        public Color colorNormal         = Color.green;                       // movimiento normal
-        public Color colorDraining       = Color.red;                         // Charging: batería drenándose
-        public Color colorReadyToAdvance = new Color(0f, 0.85f, 1f);         // ReadyToAdvance: carga al 100%
-        public Color colorWarning        = new Color(1f, 0.55f, 0f);         // batería baja
+        public Color colorNormal   = new Color(0.20f, 0.85f, 0.20f);
+        public Color colorDraining = new Color(0.90f, 0.15f, 0.10f);
+        public Color colorWarning  = new Color(1.00f, 0.50f, 0.00f);
 
-        [Tooltip("Proporción (0-1) por debajo de la cual se muestra el color de advertencia")]
-        [Range(0f, 1f)]
-        public float warningRatio = 0.30f;
+        [Range(0f, 0.4f)]
+        [Tooltip("Ratio de batería por debajo del cual mostrar aviso")]
+        public float warningRatio = 0.25f;
 
         // ─────────────────────────────────────────────────────
         private void OnEnable()
@@ -55,7 +51,7 @@ namespace Celeris.UI
         {
             if (slider != null)
             {
-                slider.interactable = false;   // el slider es solo lectura
+                slider.interactable = false;
                 slider.minValue     = 0f;
                 slider.maxValue     = 1f;
             }
@@ -74,38 +70,32 @@ namespace Celeris.UI
             RefreshColor(droide.State);
         }
 
-        private void HandleStateChanged(DroideState state)
-        {
-            RefreshColor(state);
-        }
+        private void HandleStateChanged(DroideState state) => RefreshColor(state);
 
         // ── Helpers ───────────────────────────────────────────
         private void SetSliderValue(int battery)
         {
             if (slider == null || droide == null) return;
-            slider.value = battery / (float)droide.MaxBattery;
+            slider.value = droide.MaxBattery > 0
+                ? battery / (float)droide.MaxBattery
+                : 0f;
         }
 
         private void RefreshColor(DroideState state)
         {
             if (fillImage == null || droide == null) return;
 
-            // Rojo: Phase 1 — batería drenándose durante el Stress Test
+            // Rojo mientras el ChargeTile drena batería
             if (state == DroideState.Charging)
             {
                 fillImage.color = colorDraining;
                 return;
             }
 
-            // Cian: Phase 2 — carga al 100%, Droide esperando orden del jugador
-            if (state == DroideState.ReadyToAdvance)
-            {
-                fillImage.color = colorReadyToAdvance;
-                return;
-            }
+            float ratio = droide.MaxBattery > 0
+                ? droide.Battery / (float)droide.MaxBattery
+                : 0f;
 
-            // Verde / Naranja según nivel de batería restante
-            float ratio = droide.Battery / (float)droide.MaxBattery;
             fillImage.color = ratio <= warningRatio ? colorWarning : colorNormal;
         }
     }

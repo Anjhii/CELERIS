@@ -1,6 +1,28 @@
+// ============================================================
+// DroideAnimator.cs  |  Assets/Scripts/Player/
+//
+// PARÁMETROS REALES DEL ANIMATOR CONTROLLER:
+//   isMoving        (Bool)
+//   idleVariant     (Int)   — 0 = idle normal, 1-2 = variantes
+//   isDead          (Bool)
+//   isVictory       (Bool)
+//   isReadyToAdvance(Bool)
+//   deathType       (Int)   — 0=genérico, 1=batería, 2=caída, 3=láser
+//
+// MAPPING DE ESTADOS LÓGICOS:
+//   Moving            → isMoving = true
+//   IdleBetweenTiles  → isMoving = false  (posibles variantes idle)
+//   RotatingArrow     → isMoving = false  (sin cambio extra)
+//   Charging          → isReadyToAdvance = true  (Droide atrapado en ChargeTile)
+//   AtPortal          → isReadyToAdvance = true  (Droide en portal, esperando)
+//   ReadyToAdvance    → isReadyToAdvance = true  (feedback post-ExitPortal)
+//   Dead              → isDead = true + deathType
+//   Victory           → isVictory = true
+//
+// ⚠ NUNCA se llaman isCharging ni isAtPortal (no existen en el controller).
+// ============================================================
 using System.Collections;
 using UnityEngine;
-using Celeris.Player;
 using Celeris.Data;
 
 namespace Celeris.Player
@@ -9,127 +31,164 @@ namespace Celeris.Player
     {
         [Header("Referencias")]
         public DroideController droide;
-        public Animator animator;
+        public Animator         animator;
 
         [Header("Idle Variants")]
-        [Tooltip("Probabilidad de lanzar una variante al entrar en idle (0-1)")]
-        public float variantProbability = 0.3f;
+        [Range(0f, 1f)]
+        [Tooltip("Probabilidad de reproducir una variante al entrar en idle")]
+        public float variantProbability = 0.25f;
 
-        private Coroutine _resetVariantCoroutine;
+        private Coroutine _variantCoroutine;
 
+        // ── Nombre de parámetros como constantes ──────────────
+        // Evita errores de tipeo y facilita renombrar en el futuro.
+        private const string P_MOVING    = "isMoving";
+        private const string P_IDLE_VAR  = "idleVariant";
+        private const string P_DEAD      = "isDead";
+        private const string P_VICTORY   = "isVictory";
+        private const string P_READY     = "isReadyToAdvance";
+        private const string P_DEATHTYPE = "deathType";
+
+        // ─────────────────────────────────────────────────────
         private void OnEnable()
         {
-            droide.OnStateChanged += HandleStateChanged;
+            if (droide != null) droide.OnStateChanged += HandleStateChanged;
         }
 
         private void OnDisable()
         {
-            droide.OnStateChanged -= HandleStateChanged;
+            if (droide != null) droide.OnStateChanged -= HandleStateChanged;
         }
 
         private void HandleStateChanged(DroideState state)
         {
+            if (animator == null) return;
+
             switch (state)
             {
+                // ── Moviéndose ────────────────────────────────
                 case DroideState.Moving:
-                    StopResetCoroutine();
-                    animator.SetBool("isMoving", true);
-                    animator.SetBool("isReadyToAdvance", false);
-                    animator.SetBool("isDead", false);
-                    animator.SetBool("isVictory", false);
-                    animator.SetInteger("deathType", 0);
-                    animator.SetInteger("idleVariant", 0);
+                    StopVariant();
+                    ResetAllParams();
+                    animator.SetBool(P_MOVING, true);
                     break;
 
+                // ── Idle entre tiles ──────────────────────────
                 case DroideState.IdleBetweenTiles:
-                    animator.SetBool("isMoving", false);
-                    animator.SetBool("isReadyToAdvance", false);
-                    if (_resetVariantCoroutine == null && Random.value < variantProbability)
-                    {
-                        int variant = Random.Range(1, 3);
-                        animator.SetInteger("idleVariant", variant);
-                        _resetVariantCoroutine = StartCoroutine(ResetVariantAfterClip(variant));
-                    }
-                    else
-                    {
-                        animator.SetInteger("idleVariant", 0);
-                    }
+                    animator.SetBool(P_MOVING, false);
+                    animator.SetBool(P_READY,  false);
+                    TryPlayIdleVariant();
                     break;
 
+                // ── Rotando flecha — mantener animación de movimiento ─
+                // DISEÑO: el droide gira sin detenerse; isMoving permanece true.
+                case DroideState.RotatingArrow:
+                    animator.SetBool(P_MOVING, true);
+                    break;
+
+                // ── Atrapado en ChargeTile ────────────────────
+                // isMoving = false + idleVariant = 2 (scan/forcejeo) rompe
+                // la animación de caminata y comunica visualmente la fricción.
                 case DroideState.Charging:
-                    StopResetCoroutine();
-                    animator.SetBool("isMoving", false);
-                    animator.SetBool("isReadyToAdvance", true);
-                    animator.SetBool("isDead", false);
-                    animator.SetBool("isVictory", false);
-                    animator.SetInteger("idleVariant", 0);
+                    StopVariant();
+                    ResetAllParams();
+                    animator.SetBool(P_MOVING,         false);
+                    animator.SetBool(P_READY,          true);
+                    animator.SetInteger(P_IDLE_VAR,    2);    // variante scan/forcejeo
                     break;
 
+                // ── En portal (esperando minijuego) ───────────
+                // También mapea a isReadyToAdvance: el droide está "bloqueado".
+                case DroideState.AtPortal:
+                    StopVariant();
+                    ResetAllParams();
+                    animator.SetBool(P_READY, true);
+                    break;
+
+                // ── Feedback post-ExitPortal ──────────────────
                 case DroideState.ReadyToAdvance:
-                    animator.SetBool("isMoving", false);
-                    animator.SetBool("isReadyToAdvance", true);
+                    animator.SetBool(P_MOVING, false);
+                    animator.SetBool(P_READY,  true);
                     break;
 
+                // ── Victoria ──────────────────────────────────
                 case DroideState.Victory:
-                    StopResetCoroutine();
-                    animator.SetBool("isMoving", false);
-                    animator.SetBool("isReadyToAdvance", false);
-                    animator.SetBool("isDead", false);
-                    animator.SetInteger("idleVariant", 0);
-                    animator.SetInteger("deathType", 0);
-                    animator.SetBool("isVictory", true);
+                    StopVariant();
+                    ResetAllParams();
+                    animator.SetBool(P_VICTORY, true);
                     break;
 
+                // ── Muerte ────────────────────────────────────
                 case DroideState.Dead:
-                    StopResetCoroutine();
-                    Debug.Log($"Dead — Causa: {droide.LastDeathCause} | Batería: {droide.Battery}");
-                    animator.SetBool("isMoving", false);
-                    animator.SetBool("isReadyToAdvance", false);
-                    animator.SetBool("isVictory", false);
-                    animator.SetInteger("idleVariant", 0);
-                    animator.SetBool("isDead", true);
-                    animator.SetInteger("deathType", droide.LastDeathCause switch {
+                    StopVariant();
+                    ResetAllParams();
+                    animator.SetBool(P_DEAD, true);
+                    animator.SetInteger(P_DEATHTYPE, droide.LastDeathCause switch
+                    {
+                        DeathCause.Battery => 1,
                         DeathCause.Fall    => 2,
-                        _                  => droide.Battery <= 0 ? 1 : 0
+                        DeathCause.Laser   => 3,
+                        _                  => 0
                     });
                     break;
-
-                default:
-                    animator.SetBool("isMoving", false);
-                    animator.SetBool("isReadyToAdvance", false);
-                    animator.SetBool("isDead", false);
-                    animator.SetBool("isVictory", false);
-                    animator.SetInteger("deathType", 0);
-                    animator.SetInteger("idleVariant", 0);
-                    break;
             }
         }
 
-        private IEnumerator ResetVariantAfterClip(int variant)
+        // ── API pública ───────────────────────────────────────
+
+        /// <summary>
+        /// Fuerza de inmediato la animación de scan/forcejeo (idleVariant = 2, isMoving = false).
+        /// Llamado por DroideController.SetScanAnimation() desde FrictionMovementState.Enter().
+        /// </summary>
+        public void ForceScanAnimation()
         {
-            yield return new WaitForSeconds(GetClipLength(variant));
-            animator.SetInteger("idleVariant", 0);
+            if (animator == null) return;
+            StopVariant();
+            animator.SetBool(P_MOVING,      false);
+            animator.SetInteger(P_IDLE_VAR, 2);
         }
 
-        private float GetClipLength(int variant)
+        // ── Helpers ───────────────────────────────────────────
+
+        /// <summary>
+        /// Pone todos los parámetros booleanos en false e int en 0.
+        /// Solo toca los parámetros que EXISTEN en el controller.
+        /// </summary>
+        private void ResetAllParams()
         {
-            return variant switch
-            {
-                1 => 3f,  // Mirar_Alrededor
-                2 => 2f,  // Adelante_Atras
-                _ => 2f
-            };
+            animator.SetBool(P_MOVING,    false);
+            animator.SetBool(P_DEAD,      false);
+            animator.SetBool(P_VICTORY,   false);
+            animator.SetBool(P_READY,     false);
+            animator.SetInteger(P_IDLE_VAR,  0);
+            animator.SetInteger(P_DEATHTYPE, 0);
         }
 
-        private void StopResetCoroutine()
+        private void TryPlayIdleVariant()
         {
-            if (_resetVariantCoroutine != null)
+            if (_variantCoroutine != null || !(Random.value < variantProbability))
             {
-                StopCoroutine(_resetVariantCoroutine);
-                _resetVariantCoroutine = null;
+                animator.SetInteger(P_IDLE_VAR, 0);
+                return;
             }
+
+            int v = Random.Range(1, 3);
+            animator.SetInteger(P_IDLE_VAR, v);
+            _variantCoroutine = StartCoroutine(ResetVariantAfter(v == 1 ? 3f : 2f));
         }
 
-        
+        private IEnumerator ResetVariantAfter(float seconds)
+        {
+            yield return new WaitForSeconds(seconds);
+            if (animator != null) animator.SetInteger(P_IDLE_VAR, 0);
+            _variantCoroutine = null;
+        }
+
+        private void StopVariant()
+        {
+            if (_variantCoroutine == null) return;
+            StopCoroutine(_variantCoroutine);
+            _variantCoroutine = null;
+        }
     }
 }

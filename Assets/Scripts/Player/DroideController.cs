@@ -1,4 +1,43 @@
-using System.Collections;
+// ============================================================
+// DroideController.cs  |  Assets/Scripts/Player/
+//
+// v7 — Bugs de doble-input, doble-drenaje y doble-portal corregidos.
+//
+// CAMBIOS v7 (sobre v6):
+//
+//   DOBLE INPUT CORREGIDO:
+//     HandleInput() renombrado a HandleHoldAndPulse().
+//     Ya NO delega OnPressStart/End al state machine.
+//     La delegación es EXCLUSIVA de MobileInputHandler (IPointerDown/Up).
+//     Fallback automático: si no hay MobileInputHandler en escena,
+//     el Update() lee raw input como respaldo (útil en test scenes).
+//
+//   DOBLE DRENAJE CORREGIDO:
+//     TickChargeDrain() eliminado de Update().
+//     FrictionMovementState.Tick() es el ÚNICO responsable del
+//     drenaje en ChargeTile. No hay doble contabilidad.
+//
+//   DOBLE RESTORE-FROM-PORTAL CORREGIDO:
+//     DroideController YA NO suscribe a TerminalHackManager.OnTerminalExited.
+//     GameFlowManager es el único que llama RestoreFromPortal().
+//     (GameFlowManager suscribe a OnTerminalExited y orquesta todo.)
+//
+//   DroideState.Charging EMITIDO CORRECTAMENTE:
+//     ProcessTileEffect(ChargeTile) llama SetState(Charging) después
+//     de TransitionToState(FrictionMovementState) para que el
+//     DroideAnimator active isReadyToAdvance.
+//
+//   FrictionMovementState INTEGRADO:
+//     ProcessTileEffect(ChargeTile) ahora está guardado con
+//     !IsStuckInCharge (que FrictionMovementState.Enter() setea).
+//
+//   INPUT DUAL (Mouse + Touch):
+//     GetInputDown/Up/Held() cubren ambas plataformas.
+//     Para desktop sin UI button: el fallback raw-input del Update
+//     garantiza que la escena sea jugable.
+// ============================================================
+using System;
+using Celeris.Core;
 using Celeris.Data;
 using Celeris.Grid;
 using Celeris.Core;
@@ -6,15 +45,16 @@ using UnityEngine;
 
 namespace Celeris.Player
 {
+    [RequireComponent(typeof(Rigidbody))]
     public class DroideController : MonoBehaviour
     {
         // ── Inspector ─────────────────────────────────────────
         [Header("Grid")]
         public ProceduralGridGenerator generator;
 
-        [Header("Timing")]
-        public float moveDuration      = 0.30f;
-        public float idleDuration      = 0.15f;
+        [Header("Movimiento")]
+        [Tooltip("Velocidad de traslación en unidades/segundo")]
+        public float speed = 5f;
 
         [Header("Batería")]
         [Tooltip("Valor inicial Y máximo. El 100% de carga equivale a este valor.")]
@@ -41,149 +81,363 @@ namespace Celeris.Player
         public DeathCause  LastDeathCause { get; private set; } = DeathCause.None;
         public Vector2Int  GridCoord      { get; private set; }
         public int         Battery        { get; private set; }
-        public int         MaxBattery     => startBattery;
+        public int         MaxBattery     => batteryLimit;
+        public bool        IsStuckInCharge => _isStuckInCharge;
+
+        // ── Propiedades del state machine ─────────────────────
+        public float NormalMoveDuration   => normalMoveDuration;
+        public float ChargeDrainRate      => chargeDrainRate;
+        public float ChargeMinSpeedToMove => chargeMinSpeedToMove;
+        public float ChargeTapImpulse     => chargeTapImpulse;
+        public float ChargeFrictionDecay  => chargeFrictionDecay;
+        public float ChargeEscapeSpeed    => chargeEscapeSpeed;
 
         // ── Eventos ───────────────────────────────────────────
-        public event System.Action<DroideState>   OnStateChanged;
-        public event System.Action<int>           OnBatteryChanged;
-        public event System.Action<TileComponent> OnTileEntered;
-        public event System.Action                OnLevelReset;
+        public event Action<DroideState>               OnStateChanged;
+        public event Action<int>                       OnBatteryChanged;
+        public event Action<TileComponent>             OnTileEntered;
+        public event Action                            OnLevelReset;
+        public event Action<TileComponent, Vector2Int> OnPortalEntered;
 
-        // ── Privado ───────────────────────────────────────────
-        private Vector2Int _direction        = new(0, 1);
-        private bool       _running          = false;
-        private bool       _isCharging       = false;
-        private bool       _advanceRequested = false;
-        private Coroutine  _drainCoroutine   = null;
-        private int        _loopId           = 0;
+        // ── Privado — física ──────────────────────────────────
+        private Rigidbody _rb;
+
+        // ── Privado — grid ────────────────────────────────────
+        private Vector2Int _direction          = new(0, 1);
+        private Vector2Int _lastProcessedCoord;
+
+        // ── Privado — ChargeTile ──────────────────────────────
+        // Gestionado por FrictionMovementState vía SetIsStuckInCharge().
+        private bool _isStuckInCharge = false;
+
+        // ── Privado — tipo de tile anterior ──────────────────
+        // Usado por ProcessTileEffect para evitar reiniciar la animación
+        // de scan/forcejeo al pisar tiles consecutivos del mismo clúster.
+        private TileType _lastProcessedTileType = TileType.BaseTile;
+
+        // ── Privado — hold / pulso ────────────────────────────
+        private float _holdTimer       = 0f;
+        private bool  _holdRotateFired = false;
+        private const float HOLD_THRESHOLD = 0.45f;
+        private float _lastPulseTime   = -999f;
+
+        // ── Privado — reset delay ─────────────────────────────
+        private bool  _inResetDelay = false;
+        private float _resetTimer   = 0f;
+
+        // ── Privado — state machine ───────────────────────────
+        private IPlayerState _currentState;
+        private bool         _shouldMove           = false;
+        private float        _moveDurationOverride = -1f;
+
+        // ── Privado — animador ────────────────────────────────
+        private DroideAnimator _droideAnimator;
+
+        // ── Privado — input fallback ──────────────────────────
+        // Si no hay MobileInputHandler en escena (test scenes),
+        // Update() usa raw input para OnPressStart/End.
+        private MobileInputHandler _mobileHandler;
 
         // ─────────────────────────────────────────────────────
+        private void Awake()
+        {
+            _rb = GetComponent<Rigidbody>();
+            _rb.freezeRotation = true;
+            _rb.useGravity     = false;
+            _rb.constraints    = RigidbodyConstraints.FreezePositionY
+                               | RigidbodyConstraints.FreezeRotation;
+        }
+
+        private void Start()
+        {
+            // Detectar MobileInputHandler. Si está presente, él maneja
+            // todo el press/release. Sin él, Update() usa raw input.
+            _mobileHandler = FindObjectOfType<MobileInputHandler>();
+            if (_mobileHandler == null)
+                Debug.LogWarning("[DroideController] No hay MobileInputHandler. " +
+                                 "Usando raw input (modo test).");
+
+            // Cachear el animador para llamadas directas desde estados
+            _droideAnimator = FindObjectOfType<DroideAnimator>();
+        }
+
         private void OnEnable()
         {
             if (generator != null) generator.OnGridReady += Init;
+            // NOTA: NO suscribo TerminalHackManager.OnTerminalExited aquí.
+            // GameFlowManager es el responsable de RestoreFromPortal().
+            // Suscribirlo aquí causaría doble RestoreFromPortal.
+            LaserController.OnLaserActivated += HandleLaserActivated;
         }
 
         private void OnDisable()
         {
             if (generator != null) generator.OnGridReady -= Init;
+            LaserController.OnLaserActivated -= HandleLaserActivated;
         }
 
-        // ── Init ─────────────────────────────────────────────
+        /// <summary>
+        /// Detecta láseres que se encienden mientras el droide está parado sobre ellos.
+        /// Cubre el caso donde DetectTileEntry() no dispara (misma coord que la última procesada).
+        /// </summary>
+        private void HandleLaserActivated(Vector2Int laserCoord)
+        {
+            if (laserCoord != GridCoord) return;
+            if (State == DroideState.Dead || State == DroideState.Victory ||
+                State == DroideState.AtPortal || _inResetDelay) return;
+
+            TakeDamage(batteryPenalty);
+        }
+
+        // ── Inicialización ────────────────────────────────────
         private void Init()
         {
-            transform.position = generator.StartWorldPos + Vector3.up * 1.1f;
-            GridCoord          = WorldToCoord(generator.StartWorldPos);
-            Battery            = startBattery;
-            _direction         = new Vector2Int(0, 1);
-            LastDeathCause     = DeathCause.None;
+            transform.position  = generator.StartWorldPos + Vector3.up * 1.1f;
+            transform.rotation  = Quaternion.LookRotation(Vector3.forward, Vector3.up);
 
+            GridCoord           = WorldToCoord(generator.StartWorldPos);
+            _lastProcessedCoord = GridCoord;
+            _direction          = new Vector2Int(0, 1);
+
+            Battery                  = batteryLimit;
+            _isStuckInCharge         = false;
+            _lastProcessedTileType   = TileType.BaseTile;
+            _inResetDelay            = false;
+            _resetTimer         = 0f;
+            _holdTimer          = 0f;
+            _holdRotateFired    = false;
+            _shouldMove         = false;
+            LastDeathCause      = DeathCause.None;
+
+            _rb.velocity = Vector3.zero;
+            OnBatteryChanged?.Invoke(Battery);
+
+            // Reiniciar contador de terminales al empezar nivel
+            TerminalHackManager.ResetHackedCount();
+
+            // Inicializar state machine
+            TransitionToState(new NormalMovementState());
             SetState(DroideState.IdleBetweenTiles);
-            StartCoroutine(MovementLoop());
+
+            Debug.Log("[DroideController] Init. Batería=" + Battery);
         }
 
-        // ── Loop principal ────────────────────────────────────
-        private IEnumerator MovementLoop()
+        // ── Update principal ──────────────────────────────────
+        private void Update()
         {
-            _running = true;
-            int myId = ++_loopId;
+            if (GameStateManager.IsPaused) { _rb.velocity = Vector3.zero; return; }
 
-            while (_running && myId == _loopId)
+            if (State == DroideState.Dead    ||
+                State == DroideState.Victory ||
+                State == DroideState.AtPortal)
             {
-                yield return new WaitForSeconds(idleDuration);
-                if (myId != _loopId) yield break;
+                _rb.velocity = Vector3.zero;
+                return;
+            }
 
-                var current = generator.GetTile(GridCoord);
-                if (current != null)
-                    _direction = current.GetExitDirection(_direction);
+            // ── 1. State machine: lógica por frame ────────────
+            _currentState?.Tick(this);
 
-                Vector2Int nextCoord = GridCoord + _direction;
-                var next = generator.GetTile(nextCoord);
+            // ── 2. Input raw: solo hold-to-rotate y pulso ─────
+            HandleHoldAndPulse();
 
-                if (next == null || next.tileType == TileType.VoidTile)
+            // ── 3. Aplicar velocidad al Rigidbody ─────────────
+            ApplyVelocity();
+
+            // ── 4. Detección de tile ──────────────────────────
+            DetectTileEntry();
+        }
+
+        // ── Input unificado (Mouse + Touch) ───────────────────
+
+        // La forma correcta usando la clase nativa de Unity:
+
+        private static bool GetInputDown()
+        {
+            if (UnityEngine.Input.GetMouseButtonDown(0)) return true;
+            foreach (var t in UnityEngine.Input.touches)
+                if (t.phase == TouchPhase.Began) return true;
+            return false;
+        }
+
+        private static bool GetInputUp()
+        {
+            // Solo checkeamos el mouse
+            if (UnityEngine.Input.GetMouseButtonUp(0)) return true;
+            
+            // Solo checkeamos fases específicas del touch
+            foreach (var t in UnityEngine.Input.touches)
+                if (t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled) return true;
+                
+            return false;
+        }
+
+        private static bool GetInputHeld()
+        {
+            if (UnityEngine.Input.GetMouseButton(0)) return true;
+            foreach (var t in UnityEngine.Input.touches)
+                // Stationary = dedo quieto, Moved = dedo deslizándose
+                if (t.phase == TouchPhase.Stationary || t.phase == TouchPhase.Moved) return true;
+            return false;
+        }
+        // ── Hold-to-rotate y pulso eléctrico ─────────────────
+        // MobileInputHandler gestiona OnPressStart/End y TryFireElectricPulse.
+        // Este método SOLO maneja el hold timer, el rotate y el fallback
+        // de raw input cuando no hay MobileInputHandler en escena.
+        private void HandleHoldAndPulse()
+        {
+            bool pressed  = GetInputDown();
+            bool released = GetInputUp();
+            bool held     = GetInputHeld();
+
+            // ── Fallback: raw input sin MobileInputHandler ────
+            // (modo test, escenas sin UI). Con MobileInputHandler presente,
+            // él llama OnPressStart/End directamente y este bloque no actúa.
+            if (_mobileHandler == null)
+            {
+                if (pressed)  OnPressStart();
+                if (released) OnPressEnd();
+            }
+
+            // ── Hold para rotar flecha ─────────────────────────
+            // DISEÑO: el droide NO se detiene al rotar. TryRotateArrow()
+            // redirige rb.velocity manteniendo la inercia actual.
+            if (held)
+            {
+                _holdTimer += Time.deltaTime;
+                if (!_holdRotateFired && _holdTimer >= HOLD_THRESHOLD)
+                {
+                    _holdRotateFired = true;
+                    TryRotateArrow();   // rota y redirige velocidad — sin Stop
+                }
+            }
+            if (released) { _holdTimer = 0f; _holdRotateFired = false; }
+
+            // ── Pulso eléctrico (fallback) ────────────────────
+            // MobileInputHandler llama TriggerElectricPulse() en su propio OnPointerDown.
+            // Aquí solo actúa sin MobileInputHandler.
+            if (_mobileHandler == null && pressed &&
+                !_isStuckInCharge && !_holdRotateFired &&
+                HasLaserAtRangeOne() &&
+                Time.unscaledTime - _lastPulseTime >= pulseCooldown)
+            {
+                _lastPulseTime = Time.unscaledTime;
+                TriggerElectricPulse();
+            }
+        }
+
+        // ── Velocidad de Rigidbody ────────────────────────────
+        // _shouldMove es seteado por el IPlayerState activo (NormalMovementState o FrictionMovementState).
+        // _holdRotateFired ya NO bloquea el movimiento: el droide gira manteniendo inercia.
+        private void ApplyVelocity()
+        {
+            bool canMove = _shouldMove;
+
+            if (canMove)
+            {
+                // SÍN 5: si el tile siguiente no existe y no estamos en fricción,
+                // detener el droide para evitar que "empuje" contra bordes sin tile.
+                if (!_isStuckInCharge && generator != null &&
+                    generator.GetTile(GridCoord + _direction) == null)
+                {
+                    _rb.velocity = Vector3.zero;
+                    return;
+                }
+
+                // FrictionMovementState.Enter() setea _isStuckInCharge = true,
+                // lo que aplica el multiplicador de velocidad reducida.
+                float effectiveSpeed = _isStuckInCharge
+                    ? speed * chargeSpeedMultiplier
+                    : speed;
+
+                _rb.velocity = transform.forward * effectiveSpeed;
+
+                if (!_isStuckInCharge && State != DroideState.Moving)
+                    SetState(DroideState.Moving);
+            }
+            else
+            {
+                _rb.velocity = Vector3.zero;
+
+                if (!_isStuckInCharge && State == DroideState.Moving)
+                    SetState(DroideState.IdleBetweenTiles);
+            }
+        }
+
+        // ── Detección de tile al cruzar coordenadas ───────────
+        private void DetectTileEntry()
+        {
+            Vector2Int current = WorldToCoord(transform.position);
+            if (current == _lastProcessedCoord) return;
+
+            var tile = generator.GetTile(current);
+            if (tile == null)
+            {
+                if (State != DroideState.Dead)
                 {
                     LastDeathCause = DeathCause.Fall;
-                    yield return StartCoroutine(Die());
-                    yield break;
+                    TriggerDeath();
                 }
-
-                yield return StartCoroutine(MoveToTile(nextCoord));
-                if (myId != _loopId) yield break;
-
-                Battery = Mathf.Max(0, Battery - 1);
-                OnBatteryChanged?.Invoke(Battery);
-                if (Battery <= 0)
-                {
-                    LastDeathCause = DeathCause.Battery;
-                    yield return StartCoroutine(Die());
-                    yield break;
-                }
-
-                ExitTileCleanup();
-                yield return StartCoroutine(HandleTileEffect(next));
-                if (myId != _loopId) yield break;
+                return;
             }
-        }
 
-        // ── Interpolación de movimiento + rotación ───────────
-        private IEnumerator MoveToTile(Vector2Int target)
-        {
-            SetState(DroideState.Moving);
+            _lastProcessedCoord = current;
+            GridCoord           = current;
+            OnTileEntered?.Invoke(tile);
 
-            Vector3    origin    = transform.position;
-            Vector3    dest      = generator.CoordToWorld(target) + Vector3.up * 1.1f;
-            Quaternion startRot  = transform.rotation;
-            // Calcular rotación objetivo en Y según _direction (plano XZ)
-            Quaternion targetRot = Quaternion.LookRotation(
-                new Vector3(_direction.x, 0f, _direction.y), Vector3.up);
+            ProcessTileEffect(tile);
 
-            float elapsed = 0f;
-            while (elapsed < moveDuration)
-            {
-                elapsed            += Time.deltaTime;
-                float t             = Mathf.Clamp01(elapsed / moveDuration);
-                transform.position  = Vector3.Lerp(origin, dest, t);
-                transform.rotation  = Quaternion.Slerp(startRot, targetRot, t);
-                yield return null;
-            }
-            transform.position = dest;
-            transform.rotation = targetRot;
-
-            GridCoord = target;
-            OnTileEntered?.Invoke(generator.GetTile(target));
-            SetState(DroideState.IdleBetweenTiles);
+            // Actualizar DESPUÉS de procesar para que ProcessTileEffect
+            // pueda comparar contra el tipo del tile ANTERIOR.
+            _lastProcessedTileType = tile.tileType;
         }
 
         // ── Efectos por tipo de tile ──────────────────────────
-        private IEnumerator HandleTileEffect(TileComponent tile)
+        private void ProcessTileEffect(TileComponent tile)
         {
             switch (tile.tileType)
             {
-                case TileType.GoalTile:
-                    yield return StartCoroutine(Victory());
+                case TileType.ArrowTile:
+                    ApplyArrowDirection(tile);
                     break;
 
                 case TileType.LaserTile when tile.isActive:
-                    yield return StartCoroutine(ResetLevel());
+                    TakeDamage(batteryPenalty);
                     break;
 
+                // ChargeTile: transición a FrictionMovementState.
+                // FrictionMovementState.Enter() llama SetIsStuckInCharge(true)
+                // y gestiona TODOS los drenes de batería — no hay TickChargeDrain() paralelo.
                 case TileType.ChargeTile:
-                    yield return StartCoroutine(ChargingRoutine());
+                    if (!_isStuckInCharge)
+                    {
+                        TransitionToState(new FrictionMovementState());
+                        SetState(DroideState.Charging);
+                    }
+                    // Regla 5: la animación de scan solo se dispara al entrar al PRIMER
+                    // tile del clúster. Si el tile anterior ya era ChargeTile, el droide
+                    // ya está en estado Charging y la animación no debe reiniciarse.
+                    if (_lastProcessedTileType != TileType.ChargeTile)
+                        SetScanAnimation();
                     break;
 
-                case TileType.ArrowTile:
-                    SetState(DroideState.Moving);
-                    yield return null;
+                // GoalTile: requiere las 3 terminales hackeadas
+                case TileType.GoalTile:
+                    if (TerminalHackManager.HackedTerminalsCount >= TerminalHackManager.RequiredHacks)
+                    {
+                        _rb.velocity = Vector3.zero;
+                        SetState(DroideState.Victory);
+                    }
+                    else
+                    {
+                        int faltantes = TerminalHackManager.RequiredHacks
+                                      - TerminalHackManager.HackedTerminalsCount;
+                        Debug.Log($"[DroideController] Acceso denegado — " +
+                                  $"faltan {faltantes} terminal(es) por hackear.");
+                        // Rebote suave para no quedar pegado en la meta
+                        _rb.velocity = -transform.forward * speed * 0.5f;
+                    }
                     break;
-            }
-        }
-
-        // ── Carga ─────────────────────────────────────────────
-        private IEnumerator ChargingRoutine()
-        {
-            StopDrain();
-            SetState(DroideState.Charging);
-            _running    = false;
-            _isCharging = true;
 
             var tile = generator.GetTile(GridCoord);
             var effect = tile?.GetComponentInChildren<EnergiaTileEffect>();
@@ -204,27 +458,36 @@ namespace Celeris.Player
             }
         }
 
-        private IEnumerator ReadyToAdvanceRoutine()
+        // ── Daño con retroceso físico ─────────────────────────
+        /// <summary>
+        /// Aplica daño de batería y un impulso de retroceso físico.
+        /// Si la batería llega a 0, dispara la muerte real.
+        /// No reinicia la posición — el droide retrocede y continúa jugando.
+        /// </summary>
+        public void TakeDamage(int amount)
         {
-            _advanceRequested = false;
-            SetState(DroideState.ReadyToAdvance);
+            if (State == DroideState.Dead || State == DroideState.Victory) return;
 
-            float elapsed = 0f;
-            const float autoAdvanceTimeout = 1.5f;
+            _isStuckInCharge = false;
+            Battery          = Mathf.Max(0, Battery - amount);
+            OnBatteryChanged?.Invoke(Battery);
 
-            while (!_advanceRequested && elapsed < autoAdvanceTimeout)
+            // Impulso de retroceso: desplaza al droide hacia atrás sin resetear posición
+            _rb.AddForce(-transform.forward * knockbackForce, ForceMode.Impulse);
+
+            if (Battery <= 0)
             {
-                elapsed += Time.deltaTime;
-                yield return null;
+                LastDeathCause = DeathCause.Laser;
+                TriggerDeath();
+                return;
             }
 
-            ExitTileCleanup();
-            _running = true;
+            LastDeathCause = DeathCause.Laser;
             SetState(DroideState.IdleBetweenTiles);
-            StartCoroutine(MovementLoop());
         }
 
-        private IEnumerator BatteryDrainRoutine()
+        // ── Muerte final ──────────────────────────────────────
+        private void TriggerDeath()
         {
             float accumulated = 0f;
 
@@ -248,52 +511,102 @@ namespace Celeris.Player
             }
         }
 
-        // ── Reset de nivel ────────────────────────────────────
-        private IEnumerator ResetLevel()
+        // ── Portal: retorno desde minijuego ───────────────────
+
+        /// <summary>
+        /// Restaura el Droide tras regresar del minijuego de portal.
+        /// Llamado exclusivamente por GameFlowManager. No suscribir a
+        /// TerminalHackManager.OnTerminalExited desde aquí — GameFlowManager
+        /// orquesta todo para evitar doble RestoreFromPortal.
+        /// </summary>
+        /// <summary>
+        /// Llamado por RestoreFromPortal tras reposicionar al droide.
+        /// NO avanza físicamente al droide: _lastProcessedCoord queda en el
+        /// tile del portal, por lo que el portal no se re-dispara. El primer
+        /// tile post-portal se procesará limpiamente por DetectTileEntry cuando
+        /// el jugador empiece a moverse.
+        ///
+        /// CORRECCIÓN de bug anterior: el antiguo "advance 1f" colocaba al droide
+        /// sobre el tile siguiente y lo marcaba como ya procesado
+        /// (_lastProcessedCoord = tile_post_portal). Si ese tile era un ArrowTile,
+        /// su efecto de dirección nunca se ejecutaba → el droide continuaba recto
+        /// o invertía dirección de forma erronea.
+        /// </summary>
+        private void ExitPortal()
         {
-            _running = false;
-            StopDrain();
-            if (LastDeathCause == DeathCause.None)
-                LastDeathCause = DeathCause.Laser;
+            _isStuckInCharge = false;
+            LastDeathCause   = DeathCause.None;
+            _rb.velocity     = Vector3.zero;
 
-            Battery = Mathf.Max(0, Battery - batteryPenalty);
-            OnBatteryChanged?.Invoke(Battery);
+            // El droide permanece sobre el tile de portal.
+            // _lastProcessedCoord ya fue asignado al coord del portal por
+            // RestoreFromPortal → DetectTileEntry no re-dispara el portal
+            // (current == _lastProcessedCoord mientras el droide no se mueva).
 
-            SetState(DroideState.Dead);
-            OnLevelReset?.Invoke();
-
-            if (LastDeathCause == DeathCause.Battery)
-                yield return new WaitForSeconds(2.0f);
-
-            if (Battery <= 0)
-                yield break;
-
-            Vector3 startPos = generator.StartWorldPos + Vector3.up * 1.1f;
-            yield return LerpPosition(transform.position, startPos, resetMoveDuration);
-
-            transform.position = startPos;
-            transform.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up); // Norte
-            GridCoord          = WorldToCoord(generator.StartWorldPos);
-            _direction         = new Vector2Int(0, 1);
-            LastDeathCause     = DeathCause.None;
-
+            SetState(DroideState.ReadyToAdvance);
+            TransitionToState(new NormalMovementState());
             SetState(DroideState.IdleBetweenTiles);
-            StartCoroutine(MovementLoop());
+
+            Debug.Log($"[DroideController] ExitPortal(). GridCoord={GridCoord} Dir={_direction}");
         }
 
-        // ── Muerte y Victoria ─────────────────────────────────
-        private IEnumerator Die()
+        /// <summary>
+        /// Reposiciona al droide en la coord del portal con la dirección correcta
+        /// y llama ExitPortal(). Único punto de restauración post-minijuego.
+        /// </summary>
+        public void RestoreFromPortal(Vector2Int coord, Vector2Int direction)
         {
-            _running = false;
-            SetState(DroideState.Dead);
-            yield return null;
+            _direction    = direction;
+            var dir3      = new Vector3(direction.x, 0f, direction.y).normalized;
+            var targetRot = Quaternion.LookRotation(dir3, Vector3.up);
+
+            transform.position = generator.CoordToWorld(coord) + Vector3.up * 1.1f;
+            transform.rotation = targetRot;
+            _rb.MoveRotation(targetRot);   // sync rotación interna del Rigidbody
+
+            _lastProcessedCoord = coord;
+            GridCoord           = coord;
+
+            ExitPortal();
         }
 
-        private IEnumerator Victory()
+        // ── API pública ───────────────────────────────────────
+
+        /// <summary>
+        /// MobileInputHandler llama esto en OnPointerDown.
+        /// Delega al estado activo.
+        /// </summary>
+        public void OnPressStart() => _currentState?.OnPressStart(this);
+
+        /// <summary>
+        /// MobileInputHandler llama esto en OnPointerUp.
+        /// Delega al estado activo.
+        /// </summary>
+        public void OnPressEnd() => _currentState?.OnPressEnd(this);
+
+        /// <summary>Activa o desactiva el movimiento continuo (usado por los estados).</summary>
+        public void SetShouldMove(bool value) => _shouldMove = value;
+
+        /// <summary>
+        /// FrictionMovementState.Enter/Exit llaman esto para marcar el estado de atasco.
+        /// Controla si ApplyVelocity() aplica chargeSpeedMultiplier.
+        /// </summary>
+        public void SetIsStuckInCharge(bool value)
         {
-            _running = false;
-            SetState(DroideState.Victory);
-            yield return null;
+            _isStuckInCharge = value;
+        }
+
+        /// <summary>Sobreescribe la duración del paso. Pasar -1f para restaurar el valor base.</summary>
+        public void SetMoveDurationOverride(float value) => _moveDurationOverride = value;
+
+        /// <summary>Rota la flecha del tile actual si el Droide está sobre un ArrowTile.</summary>
+        public void RotateCurrentArrow() => TryRotateArrow();
+
+        /// <summary>Resta batería sin matar al droide (usada por FrictionMovementState).</summary>
+        public void TakeBatteryHit(int amount)
+        {
+            Battery = Mathf.Max(0, Battery - amount);
+            OnBatteryChanged?.Invoke(Battery);
         }
 
         // ── API pública ───────────────────────────────────────
@@ -323,27 +636,31 @@ namespace Celeris.Player
 
         public void TriggerElectricPulse()
         {
-            for (int dx = -1; dx <= 1; dx++)
-            for (int dy = -1; dy <= 1; dy++)
-            {
-                if (Mathf.Abs(dx) + Mathf.Abs(dy) > 1) continue;
-                ToggleLaserAt(GridCoord + new Vector2Int(dx, dy));
-            }
+            LastDeathCause = cause;
+            TriggerDeath();
         }
 
-        public void TriggerElectricPulseExtended()
+        /// <summary>
+        /// Solicita al DroideAnimator que active la animación de scan/forcejeo.
+        /// Llamado por FrictionMovementState.Enter() para romper la animación de caminata
+        /// mientras el droide está atrapado en un ChargeTile.
+        /// </summary>
+        public void SetScanAnimation()
         {
-            TriggerElectricPulse();
-            ToggleLaserAt(GridCoord + _direction * 2);
+            if (_droideAnimator == null)
+                _droideAnimator = FindObjectOfType<DroideAnimator>();
+            _droideAnimator?.ForceScanAnimation();
         }
 
-        public void ConfirmAdvance()
+        /// <summary>Cambia el estado activo del state machine.</summary>
+        public void TransitionToState(IPlayerState newState)
         {
-            if (State != DroideState.ReadyToAdvance) return;
-            _advanceRequested = true;
+            _currentState?.Exit(this);
+            _currentState = newState;
+            _currentState?.Enter(this);
         }
 
-        public void RegisterChargeClick()
+        public void TriggerElectricPulse()
         {
             if (State != DroideState.Charging) return;
             Battery = Mathf.Min(startBattery, Battery + chargeClickBoost);
@@ -354,21 +671,52 @@ namespace Celeris.Player
             effect?.TriggerTapBurst();
         }
 
-        public void RotateCurrentArrow()
+        public void TryRotateArrow()
         {
             var tile = generator.GetTile(GridCoord);
-            if (tile != null && tile.tileType == TileType.ArrowTile)
-            {
-                SetState(DroideState.RotatingArrow);
-                tile.RotateArrow90Degrees();
-            }
+            if (tile == null || tile.tileType != TileType.ArrowTile) return;
+
+            tile.RotateArrow90Degrees();
+            ApplyArrowDirection(tile);
+            // Sin cambio de estado: el droide sigue en Moving (isMoving no se toca)
         }
 
-        public void ExitTileCleanup()
+        /// <summary>
+        /// Aplica la dirección de un ArrowTile al droide con precisión física.
+        ///
+        /// CORRECCIONES vs versión anterior:
+        ///   1. Axis-snap: al girar, la posición del Rigidbody se alinea al centro del tile
+        ///      en el eje perpendicular al nuevo movimiento. Elimina la deriva lateral que
+        ///      causaba que el droide "se saliera del carril" al tomar una curva.
+        ///   2. MoveRotation: sincroniza la rotación interna del Rigidbody con el transform.
+        ///      Setear transform.forward directamente no actualiza rb.rotation, lo que
+        ///      provoca que en el siguiente FixedUpdate la física use la rotación antigua.
+        /// </summary>
+        private void ApplyArrowDirection(TileComponent tile)
         {
-            StopDrain();
-            if (State == DroideState.Charging || State == DroideState.RotatingArrow)
-                SetState(DroideState.IdleBetweenTiles);
+            Vector2Int d    = TileComponent.DirectionToVector(tile.arrowDirection);
+            Vector3    dir3 = new Vector3(d.x, 0f, d.y).normalized;
+
+            // ── Axis-snap al centro del tile ──────────────────
+            // Alinear el eje perpendicular a la nueva dirección para eliminar
+            // la deriva lateral acumulada por el movimiento del Rigidbody.
+            Vector3 p = transform.position;
+            if (d.x != 0)   // nueva dirección E/W → fijar Z al centro del tile
+                p.z = tile.gridCoord.y;
+            else             // nueva dirección N/S → fijar X al centro del tile
+                p.x = tile.gridCoord.x;
+            _rb.MovePosition(p);
+
+            // ── Actualizar dirección lógica y rotación física ─
+            _direction = d;
+            var targetRot = Quaternion.LookRotation(dir3, Vector3.up);
+            transform.rotation = targetRot;          // visual inmediato
+            _rb.MoveRotation(targetRot);             // sync Rigidbody para FixedUpdate
+
+            // ── Redirigir velocidad sin perder inercia ────────
+            float spd = _rb.velocity.magnitude;
+            if (spd > 0.01f)
+                _rb.velocity = dir3 * spd;
         }
 
         public bool HasLaserAtRangeOne()
@@ -384,41 +732,12 @@ namespace Celeris.Player
             return false;
         }
 
-        public bool HasLaserInLookahead()
-        {
-            if (HasLaserAtRangeOne()) return true;
-            var ahead2 = generator.GetTile(GridCoord + _direction * 2);
-            return ahead2 != null && ahead2.tileType == TileType.LaserTile && ahead2.isActive;
-        }
-
         // ── Helpers ───────────────────────────────────────────
         private void ToggleLaserAt(Vector2Int coord)
         {
             var tile = generator.GetTile(coord);
             if (tile != null && tile.tileType == TileType.LaserTile)
                 tile.ToggleLaser();
-        }
-
-        private void StopDrain()
-        {
-            if (_drainCoroutine != null)
-            {
-                StopCoroutine(_drainCoroutine);
-                _drainCoroutine = null;
-            }
-            _isCharging = false;
-        }
-
-        private IEnumerator LerpPosition(Vector3 from, Vector3 to, float duration)
-        {
-            float elapsed = 0f;
-            while (elapsed < duration)
-            {
-                elapsed += Time.deltaTime;
-                transform.position = Vector3.Lerp(from, to, elapsed / duration);
-                yield return null;
-            }
-            transform.position = to;
         }
 
         private void SetState(DroideState s)

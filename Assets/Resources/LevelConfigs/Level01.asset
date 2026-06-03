@@ -13,10 +13,13 @@ MonoBehaviour:
   m_Name: Level01
   m_EditorClassIdentifier: 
   levelIndex: 1
-  mapLengthSegments: 7
-  gridWidth: 1
+  mapLengthSegments: 20
   batteryLimit: 30
   proceduralSeed: 0
-  weightArrow: 3
+  weightBase: 3
   weightLaser: 1
-  weightCharge: 2
+  weightCharge: 1
+  laserActiveDuration: 2
+  laserInactiveDuration: 2
+  portalInterval: 3
+  autoScaleDifficulty: 1

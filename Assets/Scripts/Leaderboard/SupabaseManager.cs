@@ -284,6 +284,70 @@ public class SupabaseManager : MonoBehaviour
         }
     }
 
+    // ─── Progreso del jugador desde Supabase ─────────────────────────────────
+    /// <summary>
+    /// Obtiene el max_unlocked_level del perfil del usuario autenticado.
+    /// Devuelve -1 en el callback si no hay conexión o el perfil no existe.
+    /// AuthManager llama esto tras un login/registro exitoso.
+    /// </summary>
+    public void FetchPlayerProgress(string userId, string accessToken, Action<int> callback)
+    {
+        if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(accessToken))
+        {
+            callback?.Invoke(-1);
+            return;
+        }
+        StartCoroutine(FetchProgressRoutine(userId, accessToken, callback));
+    }
+
+    private IEnumerator FetchProgressRoutine(string userId, string token, Action<int> callback)
+    {
+        string url = $"{UrlProfiles}?id=eq.{userId}&select=max_unlocked_level";
+
+        UnityWebRequest req = UnityWebRequest.Get(url);
+        req.SetRequestHeader("apikey",        supabaseAnonKey);
+        req.SetRequestHeader("Authorization", $"Bearer {token}");
+
+        yield return req.SendWebRequest();
+
+        if (req.result != UnityWebRequest.Result.Success)
+        {
+            Debug.LogWarning($"[SupabaseManager] No se pudo obtener progreso: {req.error}");
+            callback?.Invoke(-1);
+            yield break;
+        }
+
+        // Respuesta: [{"max_unlocked_level":3}]  o  []  (perfil nuevo sin nivel)
+        string raw   = req.downloadHandler.text;
+        string field = ExtractIntField(raw, "max_unlocked_level");
+
+        if (int.TryParse(field, out int level))
+        {
+            Debug.Log($"[SupabaseManager] Progreso del servidor: max_unlocked_level={level}");
+            callback?.Invoke(level);
+        }
+        else
+        {
+            // Perfil nuevo o campo no encontrado → empieza en 0
+            Debug.Log("[SupabaseManager] Perfil sin progreso registrado → nivel 0.");
+            callback?.Invoke(0);
+        }
+    }
+
+    // Extrae el valor entero de "campo":N del primer objeto del array JSON
+    private string ExtractIntField(string json, string field)
+    {
+        string search = $"\"{field}\":";
+        int start = json.IndexOf(search, System.StringComparison.Ordinal);
+        if (start < 0) return null;
+        start += search.Length;
+        // saltar espacios
+        while (start < json.Length && json[start] == ' ') start++;
+        int end = start;
+        while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '-')) end++;
+        return end > start ? json.Substring(start, end - start) : null;
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────────
     private UnityWebRequest CreatePostRequest(string url, string jsonBody)
     {
@@ -302,6 +366,7 @@ public class SupabaseManager : MonoBehaviour
             : supabaseAnonKey;
         req.SetRequestHeader("Authorization", $"Bearer {token}");
 
+        req.timeout = 10;   // Abortar en 10 s; la cola offline captura el error
         return req;
     }
 
@@ -328,3 +393,10 @@ public class SupabaseManager : MonoBehaviour
     private string EscapeJson(string s) =>
         s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "").Replace("\r", "");
 }
+
+
+// Acción en SupabaseManager.cs: Busca el método equivalente donde construyes tus peticiones (por ejemplo, los métodos que devuelven un UnityWebRequest para el ranking o el UPSERT). Añade el mismo límite de tiempo. Si la red fluctúa, la petición abortará limpiamente en 10 segundos y tu sistema de "Cola Offline" podrá capturar el error y guardar el puntaje como pendiente.
+
+// Acción en Cliente (SupabaseManager.cs): Modifica la estructura del método de envío de puntaje (SubmitScore). En lugar de hacer un POST/UPSERT directo a la tabla de la base de datos enviando la variable LocalHighScore, cambia el endpoint HTTP para llamar a una función RPC (Remote Procedure Call) o una Edge Function en tu Supabase. Tu payload JSON ya no debe llevar el puntaje final, sino las métricas "crudas" del juego (nivel global actual, número de intentos de esa sesión, tiempo tomado).
+
+// Acción en Servidor (Supabase): Crea una función en Postgres (RPC) o una Edge Function (Deno/TypeScript) que reciba estas métricas. En esta función del servidor, replica la lógica matemática que tienes en HackSessionData.CalculateScoreReward(). El servidor validará la coherencia de los datos, calculará el puntaje final y será el propio servidor el que ejecute el INSERT o UPSERT en la tabla. Esto vuelve inútil cualquier manipulación de la clave anónima desde el APK.

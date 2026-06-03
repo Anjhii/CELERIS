@@ -347,19 +347,34 @@ public class AuthManager : MonoBehaviour
 
         if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(userId)) return;
 
-        // Restaurar estado en memoria (el token puede estar expirado; se renueva con RefreshSession si falla)
+        // Restaurar estado en memoria
         AccessToken = token;
         Username    = uname;
         IsLoggedIn  = true;
         CurrentUser = new AuthUser { id = userId, email = email };
 
-        // Notificar al SupabaseManager y ScoreManager si ya están listos
+        // Enlazar progreso al usuario antes de cualquier navegación de escena
+        Celeris.Core.LevelManager.EnsureExists().BindToUser(userId);
+
+        // Notificar al resto del sistema
         OnLoginSuccess?.Invoke(CurrentUser);
 
-        // Intentar refrescar token en segundo plano
+        // Refrescar token y, si es válido, sincronizar progreso desde el servidor
         RefreshSession(ok =>
         {
-            if (!ok) Debug.Log("[AuthManager] Sesión expirada, se requiere nuevo login.");
+            if (ok && SupabaseManager.Instance != null)
+            {
+                SupabaseManager.Instance.FetchPlayerProgress(userId, AccessToken, serverLevel =>
+                {
+                    if (serverLevel >= 0)
+                        Celeris.Core.LevelManager.EnsureExists()
+                               .ApplyServerProgress(serverLevel);
+                });
+            }
+            else if (!ok)
+            {
+                Debug.Log("[AuthManager] Token expirado, se requiere nuevo login.");
+            }
         });
 
         Debug.Log($"[AuthManager] Sesión restaurada: {email}");
@@ -385,6 +400,25 @@ public class AuthManager : MonoBehaviour
         if (ScoreManager.Instance != null)
             ScoreManager.Instance.Username = username;
 
+        // ── Enlazar progreso al usuario y cargarlo desde el servidor ──────────
+        // 1. Cambiar la clave de PlayerPrefs al UUID de este usuario
+        Celeris.Core.LevelManager.EnsureExists().BindToUser(session.user.id);
+
+        // 2. Obtener el nivel real desde Supabase y aplicarlo
+        //    (si no hay conexión, se mantiene el valor local del usuario)
+        if (SupabaseManager.Instance != null)
+        {
+            SupabaseManager.Instance.FetchPlayerProgress(
+                session.user.id,
+                session.access_token,
+                serverLevel =>
+                {
+                    if (serverLevel >= 0)
+                        Celeris.Core.LevelManager.EnsureExists()
+                               .ApplyServerProgress(serverLevel);
+                });
+        }
+
         OnLoginSuccess?.Invoke(session.user);
     }
 
@@ -401,6 +435,9 @@ public class AuthManager : MonoBehaviour
         PlayerPrefs.DeleteKey(KEY_USER_EMAIL);
         PlayerPrefs.DeleteKey(KEY_USERNAME);
         PlayerPrefs.Save();
+
+        // Desenlazar progreso: el siguiente usuario empieza en 0
+        Celeris.Core.LevelManager.EnsureExists().UnbindUser();
     }
 
     private bool ValidateInputs(string email, string password, string username, Action<AuthResult> callback)
@@ -421,6 +458,7 @@ public class AuthManager : MonoBehaviour
         req.downloadHandler = new DownloadHandlerBuffer();
         req.SetRequestHeader("Content-Type", "application/json");
         req.SetRequestHeader("apikey",       supabaseAnonKey);
+        req.timeout = 10;   // Abortar en 10 s; el sistema de cola offline captura el error
         return req;
     }
 
@@ -448,3 +486,6 @@ public class AuthManager : MonoBehaviour
     private string EscapeJson(string s) =>
         s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "").Replace("\r", "");
 }
+
+
+// Acción en AuthManager.cs: Localiza el método CreateAuthRequest(...). Justo antes del return req;, asigna un límite de tiempo a la petición HTTP añadiendo la propiedad req.timeout = 10; (el valor es en segundos).
