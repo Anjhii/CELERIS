@@ -705,9 +705,13 @@ namespace Celeris.Player
             var tile = generator.GetTile(GridCoord);
             if (tile == null || tile.tileType != TileType.ArrowTile) return;
 
+            // No permitir rotación si haría que la flecha apunte hacia atrás
+            var nextDir = (MoveDirection)(((int)tile.arrowDirection + 1) % 4);
+            var nextVec = TileComponent.DirectionToVector(nextDir);
+            if (nextVec == -_direction) return;
+
             tile.RotateArrow90Degrees();
             ApplyArrowDirection(tile);
-            // Sin cambio de estado: el droide sigue en Moving (isMoving no se toca)
         }
 
         /// <summary>
@@ -726,10 +730,8 @@ namespace Celeris.Player
             Vector2Int d    = TileComponent.DirectionToVector(tile.arrowDirection);
             Vector3    dir3 = new Vector3(d.x, 0f, d.y).normalized;
 
-            // ── Anti-loop: ignorar giros de 180° ───────────────
-            // Si la flecha apunta en dirección contraria al movimiento,
-            // el robot se devolvería y quedaría atrapado entre dos tiles.
-            if (d == -_direction) return;
+            // Seguridad anti-loop: si la flecha apunta al tile anterior, ignorarla
+            if (GridCoord + d == _lastProcessedCoord) return;
 
             // ── Axis-snap al centro del tile ──────────────────
             // Alinear el eje perpendicular a la nueva dirección para eliminar
