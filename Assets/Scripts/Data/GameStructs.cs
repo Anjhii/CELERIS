@@ -51,10 +51,10 @@ namespace Celeris.Data
     // ── Dirección de movimiento (4 ejes) ─────────────────────
     public enum MoveDirection
     {
-        North,   // +Z
-        South,   // -Z
-        East,    // +X
-        West     // -X
+        North = 0,   // +Z
+        East  = 1,   // +X
+        South = 2,   // -Z
+        West  = 3    // -X
     }
 
     public enum DeathCause
