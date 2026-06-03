@@ -589,6 +589,7 @@ GameObject:
   - component: {fileID: 645165028}
   - component: {fileID: 645165027}
   - component: {fileID: 645165032}
+  - component: {fileID: 645165033}
   m_Layer: 0
   m_Name: Droide
   m_TagString: Untagged
@@ -609,16 +610,20 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   generator: {fileID: 823865156}
-  NormalMoveDuration: 0.25
+  speed: 5
   batteryLimit: 100
-  batteryDrainPerStep: 5
-  ChargeMinSpeedToMove: 0.05
-  ChargeTapImpulse: 0.2
-  ChargeFrictionDecay: 0.25
-  ChargeEscapeSpeed: 0.85
-  ChargeDrainRate: 8
+  batteryDrainPerTile: 5
+  chargeSpeedMultiplier: 0.1
+  chargeDrainRate: 10
+  tapEscapeThreshold: 8
+  chargeMinSpeedToMove: 0.1
+  chargeTapImpulse: 0.25
+  chargeFrictionDecay: 0.5
+  chargeEscapeSpeed: 0.8
+  normalMoveDuration: 0.2
   batteryPenalty: 5
-  resetMoveDuration: 0.6
+  resetDelay: 0.8
+  pulseCooldown: 3
 --- !u!136 &645165028
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -673,6 +678,33 @@ MonoBehaviour:
   droide: {fileID: 645165027}
   animator: {fileID: 1254990653}
   variantProbability: 0.3
+--- !u!54 &645165033
+Rigidbody:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 645165026}
+  serializedVersion: 4
+  m_Mass: 1
+  m_Drag: 0
+  m_AngularDrag: 0.05
+  m_CenterOfMass: {x: 0, y: 0, z: 0}
+  m_InertiaTensor: {x: 1, y: 1, z: 1}
+  m_InertiaRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ImplicitCom: 1
+  m_ImplicitTensor: 1
+  m_UseGravity: 1
+  m_IsKinematic: 0
+  m_Interpolate: 0
+  m_Constraints: 0
+  m_CollisionDetection: 0
 --- !u!1 &819680035
 GameObject:
   m_ObjectHideFlags: 0

@@ -62,7 +62,8 @@ namespace Celeris.Data
         None,
         Battery,
         Fall,
-        Laser
+        Laser,
+        Generic   // causa genérica (ej. fallo en minijuego de hackeo)
     }
 
     // ── Datos persistentes del jugador ───────────────────────

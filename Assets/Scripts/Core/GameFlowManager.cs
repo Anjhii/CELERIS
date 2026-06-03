@@ -5,7 +5,7 @@
 //   Adjuntar a cualquier GameObject (ej. "GameManager").
 //   Las referencias se buscan automáticamente si se dejan vacías.
 //
-// FLUJO v4:
+// FLUJO v5:
 //
 //   VICTORIA:
 //     DroideState.Victory → espera victoryDelay → LevelManager.AdvanceLevel()
@@ -14,17 +14,26 @@
 //     DroideController.OnPortalEntered
 //       → GameStateManager.Pause() + SetPortalReturn()
 //       → SceneManager.LoadScene("MiniGameScene", Additive)
-//         (GameplayScene permanece cargada: tiles visibles)
-//       → MiniGameSimulator llama CompleteMinigame()
-//       → GameFlowManager.OnPortalComplete()
-//           → SceneManager.UnloadSceneAsync("MiniGameScene")
-//           → PortalTileComponent.MarkCompleted() (tile sombreado)
-//           → DroideController.RestoreFromPortal()
-//           → GameStateManager.Resume()
 //
-//   GAME OVER:
-//     GameOverController escucha DroideState.Dead directamente.
-//     No necesita intervención de GameFlowManager.
+//     Cuando el minijuego termina (dos caminos posibles):
+//       A) TerminalHackManager.OnTerminalExited (minijuego real)
+//            → GameFlowManager.OnTerminalHackExited()
+//            → OnPortalComplete()
+//       B) MiniGameSimulator.CompleteMinigame() (simulador temporal)
+//            → GameFlowManager.OnPortalComplete() directamente
+//
+//     OnPortalComplete() (con guard _portalSceneLoaded):
+//       → SceneManager.UnloadSceneAsync("MiniGameScene")
+//       → PortalTileComponent.MarkCompleted()
+//       → DroideController.RestoreFromPortal()   ← único punto de restauración
+//       → GameStateManager.Resume()
+//
+// CAMBIOS v5:
+//   • Suscripción a TerminalHackManager.OnTerminalExited para integrar
+//     el minijuego real sin double-unload ni double-restore.
+//   • Guard en OnPortalComplete(): _portalSceneLoaded previene doble llamada
+//     tanto desde MiniGameSimulator como desde TerminalHackManager.
+//   • DroideController ya NO suscribe a OnTerminalExited.
 // ============================================================
 using System.Collections;
 using Celeris.Data;
@@ -50,6 +59,8 @@ namespace Celeris.Core
         public string miniGameSceneName = "MiniGameScene";
 
         // ── Estado de portal ──────────────────────────────────
+        // Guard central: previene double-unload y double-restore.
+        // Se setea true al cargar MiniGameScene, false al descargarla.
         private bool _portalSceneLoaded = false;
 
         // ── Awake ─────────────────────────────────────────────
@@ -59,7 +70,6 @@ namespace Celeris.Core
             AutoConnect();
             InjectLevelConfig();
 
-            // ¿Estamos restaurando desde portal? (por si el nivel se recargó)
             if (GameStateManager.Instance.HasPortalReturn)
                 generator.OnGridReady += OnGridReadyAfterPortalReturn;
         }
@@ -67,11 +77,21 @@ namespace Celeris.Core
         private void OnEnable()
         {
             if (droide != null) Subscribe();
+
+            // Suscribir al evento de salida del minijuego real (TerminalHackManager).
+            // Este es el punto central de integración: cuando TerminalHackManager
+            // termina con éxito, notifica aquí y GameFlowManager orquesta todo.
+            TerminalHackManager.OnTerminalExited += OnTerminalHackExited;
+
+            // Suscribir al game over del minijuego: descarga la escena y muestra el panel.
+            TerminalHackManager.OnHackGameOver += OnHackGameOverReceived;
         }
 
         private void OnDisable()
         {
             if (droide != null) Unsubscribe();
+            TerminalHackManager.OnTerminalExited -= OnTerminalHackExited;
+            TerminalHackManager.OnHackGameOver   -= OnHackGameOverReceived;
         }
 
         private void Start()
@@ -84,7 +104,7 @@ namespace Celeris.Core
             }
         }
 
-        // ── Suscripciones ─────────────────────────────────────
+        // ── Suscripciones al Droide ───────────────────────────
         private void Subscribe()
         {
             droide.OnStateChanged  += HandleStateChanged;
@@ -122,7 +142,6 @@ namespace Celeris.Core
             GameStateManager.Instance.SetPortalReturn(coord, droideDirection, coord);
             GameStateManager.Instance.Pause();
 
-            // Carga ADITIVA: GameplayScene permanece cargada con todos los tiles
             _portalSceneLoaded = true;
             StartCoroutine(LoadMiniGameAdditive());
         }
@@ -132,7 +151,6 @@ namespace Celeris.Core
             AsyncOperation op = SceneManager.LoadSceneAsync(miniGameSceneName, LoadSceneMode.Additive);
             yield return op;
 
-            // Hacer activa la escena del minijuego para que su UI quede al frente
             Scene miniScene = SceneManager.GetSceneByName(miniGameSceneName);
             if (miniScene.IsValid())
                 SceneManager.SetActiveScene(miniScene);
@@ -140,28 +158,54 @@ namespace Celeris.Core
             Debug.Log($"[GameFlowManager] {miniGameSceneName} cargada de forma aditiva.");
         }
 
-        // ── Portal: retorno (llamado por MiniGameSimulator) ───
+        // ── Portal: retorno desde TerminalHackManager (minijuego real) ──
+        /// <summary>
+        /// Recibe el evento de TerminalHackManager cuando el hack termina con éxito.
+        /// Guard: solo actúa si la escena del minijuego está efectivamente cargada.
+        /// </summary>
+        private void OnTerminalHackExited()
+        {
+            if (!_portalSceneLoaded)
+            {
+                Debug.LogWarning("[GameFlowManager] OnTerminalHackExited recibido pero " +
+                                 "no hay escena de portal activa. Ignorado.");
+                return;
+            }
+            Debug.Log("[GameFlowManager] TerminalHackManager completado → iniciando retorno de portal.");
+            OnPortalComplete();
+        }
 
+        // ── Portal: retorno desde MiniGameSimulator (simulador temporal) ─
         /// <summary>
         /// Llamar desde MiniGameSimulator.CompleteMinigame() cuando la ruta es portal.
-        /// Descarga el minijuego, marca el portal y restaura el Droide.
+        /// Guard _portalSceneLoaded previene doble ejecución si ambos caminos disparan.
         /// </summary>
         public void OnPortalComplete()
         {
+            // Guard: si ya se procesó (por doble llamada desde Simulator + TerminalHack),
+            // ignorar la segunda.
+            if (!_portalSceneLoaded)
+            {
+                Debug.LogWarning("[GameFlowManager] OnPortalComplete() llamado sin portal activo. Ignorado.");
+                return;
+            }
             StartCoroutine(UnloadMiniGameAndRestore());
         }
 
         private IEnumerator UnloadMiniGameAndRestore()
         {
+            // Marcar como no cargado INMEDIATAMENTE para que cualquier llamada
+            // concurrente sea descartada por el guard antes de que la corrutina termine.
+            _portalSceneLoaded = false;
+
             // Restaurar escena de juego como activa
             Scene gameplayScene = SceneManager.GetSceneByName("GameplayScene");
             if (gameplayScene.IsValid())
                 SceneManager.SetActiveScene(gameplayScene);
 
-            // Descargar minijuego
+            // Descargar minijuego (único punto de descarga)
             AsyncOperation op = SceneManager.UnloadSceneAsync(miniGameSceneName);
             yield return op;
-            _portalSceneLoaded = false;
 
             // Consumir estado de retorno
             if (!GameStateManager.Instance.ConsumePortalReturn(
@@ -173,7 +217,7 @@ namespace Celeris.Core
                 yield break;
             }
 
-            // Marcar portal como completado (color sombreado)
+            // Marcar portal como completado (visual sombreado)
             var portalTile = generator?.GetTile(portalTileCoord);
             if (portalTile != null)
             {
@@ -181,7 +225,9 @@ namespace Celeris.Core
                 portalComp?.MarkCompleted();
             }
 
-            // Restaurar Droide en la misma posición
+            // Restaurar Droide — ÚNICO punto de llamada a RestoreFromPortal().
+            // DroideController ya no suscribe a OnTerminalExited, así que no
+            // hay double-restore posible.
             if (droide == null) droide = FindObjectOfType<DroideController>();
             droide?.RestoreFromPortal(coord, direction);
 
@@ -206,6 +252,39 @@ namespace Celeris.Core
             if (droide == null) droide = FindObjectOfType<DroideController>();
             droide?.RestoreFromPortal(coord, direction);
             GameStateManager.Instance.Resume();
+        }
+
+        // ── Game Over del minijuego ───────────────────────────
+        /// <summary>
+        /// Recibe OnHackGameOver de TerminalHackManager (3 intentos agotados).
+        /// Descarga MiniGameScene y muestra el panel de Game Over en-juego.
+        /// </summary>
+        private void OnHackGameOverReceived()
+        {
+            StartCoroutine(UnloadMiniGameAndShowGameOver());
+        }
+
+        private IEnumerator UnloadMiniGameAndShowGameOver()
+        {
+            // Limpiar estado de portal igual que en flujo normal
+            _portalSceneLoaded = false;
+
+            Scene gameplayScene = SceneManager.GetSceneByName("GameplayScene");
+            if (gameplayScene.IsValid())
+                SceneManager.SetActiveScene(gameplayScene);
+
+            AsyncOperation op = SceneManager.UnloadSceneAsync(miniGameSceneName);
+            if (op != null) yield return op;
+
+            // Reanudar estado de pausa antes de delegar la muerte al droide
+            GameStateManager.Instance.Resume();
+
+            // Delegar el game over al DroideController: ForceKill dispara OnStateChanged(Dead),
+            // que GameOverController escucha para mostrar el panel automáticamente.
+            if (droide == null) droide = FindObjectOfType<DroideController>();
+            droide?.ForceKill(Celeris.Data.DeathCause.Generic);
+
+            Debug.Log("[GameFlowManager] Hack Game Over — ForceKill(Generic) disparado.");
         }
 
         // ── Helpers ───────────────────────────────────────────

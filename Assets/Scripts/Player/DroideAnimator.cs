@@ -80,17 +80,21 @@ namespace Celeris.Player
                     TryPlayIdleVariant();
                     break;
 
-                // ── Rotando flecha (idle breve) ───────────────
+                // ── Rotando flecha — mantener animación de movimiento ─
+                // DISEÑO: el droide gira sin detenerse; isMoving permanece true.
                 case DroideState.RotatingArrow:
-                    animator.SetBool(P_MOVING, false);
+                    animator.SetBool(P_MOVING, true);
                     break;
 
                 // ── Atrapado en ChargeTile ────────────────────
-                // Se mapea a isReadyToAdvance como feedback visual de "espera".
+                // isMoving = false + idleVariant = 2 (scan/forcejeo) rompe
+                // la animación de caminata y comunica visualmente la fricción.
                 case DroideState.Charging:
                     StopVariant();
                     ResetAllParams();
-                    animator.SetBool(P_READY, true);
+                    animator.SetBool(P_MOVING,         false);
+                    animator.SetBool(P_READY,          true);
+                    animator.SetInteger(P_IDLE_VAR,    2);    // variante scan/forcejeo
                     break;
 
                 // ── En portal (esperando minijuego) ───────────
@@ -128,6 +132,20 @@ namespace Celeris.Player
                     });
                     break;
             }
+        }
+
+        // ── API pública ───────────────────────────────────────
+
+        /// <summary>
+        /// Fuerza de inmediato la animación de scan/forcejeo (idleVariant = 2, isMoving = false).
+        /// Llamado por DroideController.SetScanAnimation() desde FrictionMovementState.Enter().
+        /// </summary>
+        public void ForceScanAnimation()
+        {
+            if (animator == null) return;
+            StopVariant();
+            animator.SetBool(P_MOVING,      false);
+            animator.SetInteger(P_IDLE_VAR, 2);
         }
 
         // ── Helpers ───────────────────────────────────────────
