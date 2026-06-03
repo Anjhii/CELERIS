@@ -41,7 +41,7 @@ namespace Celeris.Grid
         {
             if (tileType != TileType.ArrowTile) return;
             arrowDirection = (MoveDirection)(((int)arrowDirection + 1) % 4);
-            transform.Rotate(Vector3.up, 90f, Space.World);
+            Refresh();
         }
 
         public void ToggleLaser()
