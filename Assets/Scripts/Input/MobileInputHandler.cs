@@ -102,8 +102,24 @@ namespace Celeris.Input
         {
             if (!_isPressed) return;
             _isPressed = false;
-
             if (droide == null || _holdFired) return;
+
+            if (droide.State == DroideState.Charging)
+            {
+                droide.RegisterChargeClick();
+                droide.TriggerLightPulse();
+            }
+            else
+            {
+                droide.TriggerLightPulse();
+
+                if (droide.State != DroideState.Dead &&
+                    droide.State != DroideState.Victory &&
+                    droide.HasLaserAtRangeOne())
+                {
+                    TryFireElectricPulse();
+                }
+            }
 
             droide.OnPressEnd();
         }

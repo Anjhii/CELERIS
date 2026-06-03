@@ -8,6 +8,7 @@
 //   • GetExitDirection: sin VoidTile; continúa recto por defecto.
 // ============================================================
 using Celeris.Data;
+using System.Collections;
 using UnityEngine;
 
 namespace Celeris.Grid
@@ -32,6 +33,7 @@ namespace Celeris.Grid
 
         // ── Renderer ─────────────────────────────────────────
         private Renderer _rend;
+        private static readonly int EmissionColorID = Shader.PropertyToID("_EmissionColor");
 
         // Colores placeholder indexados por (int)TileType
         private static readonly Color[] TypeColors =
@@ -85,6 +87,42 @@ namespace Celeris.Grid
             if (tileType == TileType.LaserTile && !isActive) c *= 0.30f;
 
             _rend.material.color = c;
+        }
+
+        public void PulseEmission(float duration = 0.3f)
+        {
+            if (_rend == null) return;
+            StartCoroutine(EmissionPulseRoutine(duration));
+        }
+
+        private IEnumerator EmissionPulseRoutine(float duration)
+        {
+            var mat = _rend.material;
+
+            Color baseEmission = mat.GetColor(EmissionColorID);
+            Color peakEmission = baseEmission + new Color(0.4f, 0.5f, 0.6f) * 2f;
+
+            float elapsed = 0f;
+            float half    = duration * 0.5f;
+
+            while (elapsed < half)
+            {
+                elapsed += Time.deltaTime;
+                float t  = Mathf.Clamp01(elapsed / half);
+                mat.SetColor(EmissionColorID, Color.Lerp(baseEmission, peakEmission, t));
+                yield return null;
+            }
+
+            elapsed = 0f;
+            while (elapsed < half)
+            {
+                elapsed += Time.deltaTime;
+                float t  = Mathf.Clamp01(elapsed / half);
+                mat.SetColor(EmissionColorID, Color.Lerp(peakEmission, baseEmission, t));
+                yield return null;
+            }
+
+            mat.SetColor(EmissionColorID, baseEmission);
         }
 
         public static Vector2Int DirectionToVector(MoveDirection dir) => dir switch

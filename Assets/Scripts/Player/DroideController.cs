@@ -99,6 +99,14 @@ namespace Celeris.Player
         [Header("Pulso Eléctrico")]
         public float pulseCooldown = 3f;
 
+        [Header("Efectos")]
+        public LightPulse lightPulse;
+        public ShockwaveEffect shockwave;
+
+        [Header("Tile de Carga (Tap rápido)")]
+        [Tooltip("Batería que suma cada tap del jugador durante la carga")]
+        public int chargeClickBoost = 1;
+
         // ── Estado público ────────────────────────────────────
         public DroideState State          { get; private set; } = DroideState.IdleBetweenTiles;
         public DeathCause  LastDeathCause { get; private set; } = DeathCause.None;
@@ -442,6 +450,10 @@ namespace Celeris.Player
                     // ya está en estado Charging y la animación no debe reiniciarse.
                     if (_lastProcessedTileType != TileType.ChargeTile)
                         SetScanAnimation();
+
+                    // Activar feedback visual del ChargeTile
+                    var chargeEffect = tile.GetComponentInChildren<EnergiaTileEffect>();
+                    chargeEffect?.StartDraining();
                     break;
 
                 // GoalTile: requiere las 3 terminales hackeadas
@@ -609,6 +621,11 @@ namespace Celeris.Player
         {
             Battery = Mathf.Max(0, Battery - amount);
             OnBatteryChanged?.Invoke(Battery);
+
+            float ratio = Battery / (float)MaxBattery;
+            var tile    = generator.GetTile(GridCoord);
+            var effect  = tile?.GetComponentInChildren<EnergiaTileEffect>();
+            effect?.UpdateBatteryColor(ratio);
         }
 
         /// <summary>Mata al droide con la causa indicada (usada por FrictionMovementState).</summary>
@@ -616,6 +633,40 @@ namespace Celeris.Player
         {
             LastDeathCause = cause;
             TriggerDeath();
+        }
+
+        /// <summary>Suma batería por tap en ChargeTile con feedback visual.</summary>
+        public void RegisterChargeClick()
+        {
+            Battery = Mathf.Min(batteryLimit, Battery + chargeClickBoost);
+            OnBatteryChanged?.Invoke(Battery);
+
+            var tile   = generator.GetTile(GridCoord);
+            var effect = tile?.GetComponentInChildren<EnergiaTileEffect>();
+            effect?.TriggerTapBurst();
+        }
+
+        public void TriggerLightPulse()
+        {
+            if (lightPulse != null) lightPulse.Pulse();
+            if (shockwave != null) shockwave.Trigger();
+            PulseAdjacentTiles();
+        }
+
+        public void PulseAdjacentTiles()
+        {
+            Vector2Int[] neighbors =
+            {
+                GridCoord + new Vector2Int( 1,  0),
+                GridCoord + new Vector2Int(-1,  0),
+                GridCoord + new Vector2Int( 0,  1),
+                GridCoord + new Vector2Int( 0, -1)
+            };
+            foreach (var coord in neighbors)
+            {
+                var tile = generator.GetTile(coord);
+                tile?.PulseEmission();
+            }
         }
 
         /// <summary>
@@ -640,6 +691,7 @@ namespace Celeris.Player
 
         public void TriggerElectricPulse()
         {
+            TriggerLightPulse();
             for (int dx = -1; dx <= 1; dx++)
             for (int dy = -1; dy <= 1; dy++)
             {

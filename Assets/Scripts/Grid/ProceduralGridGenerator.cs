@@ -69,6 +69,7 @@ namespace Celeris.Grid
         // ── API pública ───────────────────────────────────────
         public IReadOnlyDictionary<Vector2Int, TileComponent> TileMap => _tileMap;
         public Vector3 StartWorldPos { get; private set; }
+        public event Action OnGridStarted;
         public event Action OnGridReady;
 
         // ── Privado ───────────────────────────────────────────
@@ -104,6 +105,8 @@ namespace Celeris.Grid
             }
 
             _diff = config.GetScaledDifficulty();
+
+            OnGridStarted?.Invoke();
 
             // Semilla aleatoria — cada intento produce un mapa distinto.
             var rng = new System.Random();
