@@ -108,7 +108,14 @@ namespace Celeris.Grid
 
             OnGridStarted?.Invoke();
 
-            yield return StartCoroutine(PlayWaveAnimation(path));
+            // Semilla aleatoria — cada intento produce un mapa distinto.
+            var rng = new System.Random();
+
+            int totalTiles = config.GetTotalTiles(_diff.ExtraSegments);
+
+            Debug.Log($"[Generator] v7 | Nivel={config.levelIndex} " +
+                      $"TotalTiles={totalTiles} " +
+                      $"LaserMult={_diff.LaserWeightMultiplier:F1} (seed=random)");
 
             var path = GeneratePath(rng, totalTiles);
             SpawnPathTiles(path);
