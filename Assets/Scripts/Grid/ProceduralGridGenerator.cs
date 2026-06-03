@@ -69,6 +69,7 @@ namespace Celeris.Grid
         // ── API pública ───────────────────────────────────────
         public IReadOnlyDictionary<Vector2Int, TileComponent> TileMap => _tileMap;
         public Vector3 StartWorldPos { get; private set; }
+        public event Action OnGridStarted;
         public event Action OnGridReady;
 
         // ── Privado ───────────────────────────────────────────
@@ -105,14 +106,9 @@ namespace Celeris.Grid
 
             _diff = config.GetScaledDifficulty();
 
-            // Semilla aleatoria — cada intento produce un mapa distinto.
-            var rng = new System.Random();
+            OnGridStarted?.Invoke();
 
-            int totalTiles = config.GetTotalTiles(_diff.ExtraSegments);
-
-            Debug.Log($"[Generator] v7 | Nivel={config.levelIndex} " +
-                      $"TotalTiles={totalTiles} " +
-                      $"LaserMult={_diff.LaserWeightMultiplier:F1} (seed=random)");
+            yield return StartCoroutine(PlayWaveAnimation(path));
 
             var path = GeneratePath(rng, totalTiles);
             SpawnPathTiles(path);

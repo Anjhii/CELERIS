@@ -1,20 +1,12 @@
-// ============================================================
-// TileComponent.cs  |  Assets/Scripts/Grid/
-// Un componente por GameObject de tile.
-//
-// v4:
-//   • Solo 6 tipos de tile: Base, Arrow, Laser, Charge, Goal, Portal.
-//   • TypeColors indexado por (int)TileType directamente.
-//   • GetExitDirection: sin VoidTile; continúa recto por defecto.
-// ============================================================
+using Celeris.Core;
 using Celeris.Data;
+using System.Collections;
 using UnityEngine;
 
 namespace Celeris.Grid
 {
     public class TileComponent : MonoBehaviour
     {
-        // ── Datos ─────────────────────────────────────────────
         [Header("Tipo")]
         public TileType tileType = TileType.BaseTile;
 
@@ -22,36 +14,24 @@ namespace Celeris.Grid
         public MoveDirection arrowDirection = MoveDirection.North;
 
         [Header("Estado interactivo")]
-        /// <summary>
-        /// Para LaserTile: true = activo (peligroso).
-        /// Gestionado por LaserController en runtime.
-        /// </summary>
         public bool isActive = true;
+
+        [Header("Modelos especiales")]
+        public static GameObject ArrowPrefab;
+        public static GameObject LaserPrefab;
+        public static GameObject ChargePrefab;
+        public static GameObject GoalPrefab;
 
         [HideInInspector] public Vector2Int gridCoord;
 
-        // ── Renderer ─────────────────────────────────────────
         private Renderer _rend;
+        private GameObject _specialModel;
+        private static readonly int EmissionColorID = Shader.PropertyToID("_EmissionColor");
 
-        // Colores placeholder indexados por (int)TileType
-        private static readonly Color[] TypeColors =
-        {
-            new Color(0.22f, 0.22f, 0.22f),   // 0 BaseTile   — gris oscuro
-            new Color(0.20f, 0.55f, 1.00f),   // 1 ArrowTile  — azul
-            new Color(1.00f, 0.38f, 0.00f),   // 2 LaserTile  — naranja
-            new Color(0.15f, 0.85f, 0.35f),   // 3 ChargeTile — verde
-            new Color(1.00f, 0.88f, 0.08f),   // 4 GoalTile   — amarillo
-            new Color(0.58f, 0.08f, 1.00f)    // 5 PortalTile — violeta
-        };
-
-        // ── Init ─────────────────────────────────────────────
         private void Awake()
         {
             _rend = GetComponentInChildren<Renderer>();
-            Refresh();
         }
-
-        // ── Acciones públicas ─────────────────────────────────
 
         public void RotateArrow90Degrees()
         {
@@ -64,36 +44,143 @@ namespace Celeris.Grid
         {
             if (tileType != TileType.LaserTile) return;
             isActive = !isActive;
-            Refresh();
+            ApplyVisual();
         }
 
-        // ── Dirección de salida ───────────────────────────────
-        public Vector2Int GetExitDirection(Vector2Int currentDir) =>
-            tileType == TileType.ArrowTile
-                ? DirectionToVector(arrowDirection)
-                : currentDir;
+        public Vector2Int GetExitDirection(Vector2Int currentDir)
+        {
+            return tileType switch
+            {
+                TileType.ArrowTile => DirectionToVector(arrowDirection),
+                TileType.VoidTile  => Vector2Int.zero,
+                _                  => currentDir
+            };
+        }
 
-        // ── Visual ───────────────────────────────────────────
         public void Refresh()
         {
-            if (_rend == null) _rend = GetComponentInChildren<Renderer>();
-            if (_rend == null) return;
-
-            int idx = Mathf.Clamp((int)tileType, 0, TypeColors.Length - 1);
-            Color c = TypeColors[idx];
-
-            if (tileType == TileType.LaserTile && !isActive) c *= 0.30f;
-
-            _rend.material.color = c;
+            ApplyVisual();
         }
 
-        public static Vector2Int DirectionToVector(MoveDirection dir) => dir switch
+        private void ApplyVisual()
         {
-            MoveDirection.North => Vector2Int.up,
-            MoveDirection.South => Vector2Int.down,
-            MoveDirection.East  => Vector2Int.right,
-            MoveDirection.West  => Vector2Int.left,
-            _                   => Vector2Int.up
-        };
+            SpawnSpecialModel();
+            UpdateLasers();
+        }
+
+        private void UpdateLasers()
+        {
+            if (tileType != TileType.LaserTile || _specialModel == null) return;
+
+            Transform lasersGroup = _specialModel.transform.Find("Lasers");
+            if (lasersGroup == null) return;
+
+            lasersGroup.gameObject.SetActive(isActive);
+        }
+
+        private void SpawnSpecialModel()
+        {
+            if (_specialModel != null)
+            {
+                Destroy(_specialModel);
+                _specialModel = null;
+            }
+
+            GameObject prefab = tileType switch
+            {
+                TileType.ArrowTile  => ArrowPrefab,
+                TileType.LaserTile  => LaserPrefab,
+                TileType.ChargeTile => ChargePrefab,
+                TileType.GoalTile   => GoalPrefab,
+                _                   => null
+            };
+
+            if (prefab == null) return;
+
+            _specialModel = Instantiate(prefab, transform);
+            _specialModel.transform.localPosition = Vector3.zero;
+
+            if (tileType == TileType.LaserTile || tileType == TileType.GoalTile)
+            {
+                float angle = arrowDirection switch
+                {
+                    MoveDirection.North => 180f,
+                    MoveDirection.South => 0f,
+                    MoveDirection.East  => 270f,
+                    MoveDirection.West  => 90f,
+                    _                   => 0f
+                };
+                _specialModel.transform.localRotation = Quaternion.Euler(0f, angle, 0f);
+            }
+            else if (tileType == TileType.ArrowTile)
+            {
+                float angle = arrowDirection switch
+                {
+                    MoveDirection.North => 0f,
+                    MoveDirection.East  => 90f,
+                    MoveDirection.South => 180f,
+                    MoveDirection.West  => 270f,
+                    _                   => 0f
+                };
+                _specialModel.transform.localRotation = Quaternion.Euler(0f, angle, 0f);
+            }
+            else
+            {
+                _specialModel.transform.localRotation = Quaternion.identity;
+            }
+
+            if (tileType == TileType.ChargeTile)
+            {
+                var effect = _specialModel.GetComponent<EnergiaTileEffect>();
+                if (effect != null)
+                    effect.StopEffect();
+            }
+        }
+
+        public void PulseEmission(float duration = 0.3f)
+        {
+            if (_rend == null) return;
+            StartCoroutine(EmissionPulseRoutine(duration));
+        }
+
+        private IEnumerator EmissionPulseRoutine(float duration)
+        {
+            var mat = _rend.material;
+
+            Color baseEmission = mat.GetColor(EmissionColorID);
+            Color peakEmission = baseEmission + new Color(0.4f, 0.5f, 0.6f) * 2f;
+
+            float elapsed = 0f;
+            float half    = duration * 0.5f;
+
+            while (elapsed < half)
+            {
+                elapsed += Time.deltaTime;
+                float t  = Mathf.Clamp01(elapsed / half);
+                mat.SetColor(EmissionColorID, Color.Lerp(baseEmission, peakEmission, t));
+                yield return null;
+            }
+
+            elapsed = 0f;
+            while (elapsed < half)
+            {
+                elapsed += Time.deltaTime;
+                float t  = Mathf.Clamp01(elapsed / half);
+                mat.SetColor(EmissionColorID, Color.Lerp(peakEmission, baseEmission, t));
+                yield return null;
+            }
+
+            mat.SetColor(EmissionColorID, baseEmission);
+        }
+
+        public static Vector2Int DirectionToVector(MoveDirection dir) =>
+            dir switch
+            {
+                MoveDirection.North => Vector2Int.up,
+                MoveDirection.South => Vector2Int.down,
+                MoveDirection.East  => Vector2Int.right,
+                MoveDirection.West  => Vector2Int.left,
+                _                   => Vector2Int.up
+            };
     }
 }

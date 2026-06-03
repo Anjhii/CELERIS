@@ -103,9 +103,24 @@ namespace Celeris.Input
             if (!_isPressed) return;
             _isPressed = false;
 
-            if (droide == null || _holdFired) return;
+            // Charging: suma batería durante el Stress Test.
+            if (droide.State == DroideState.Charging)
+            {
+                droide.RegisterChargeClick();
+                droide.TriggerLightPulse();
+                return;
+            }
 
-            droide.OnPressEnd();
+            // ── Pulso de luz en CADA tap ──────────────────────────
+            droide.TriggerLightPulse();
+
+            // ── Pulso eléctrico solo si hay laser adyacente ───────
+            if (droide.State != DroideState.Dead &&
+                droide.State != DroideState.Victory &&
+                droide.HasLaserAtRangeOne())
+            {
+                TryEnqueuePulse();
+            }
         }
 
         // ── Update: hold para rotar flecha ───────────────────
