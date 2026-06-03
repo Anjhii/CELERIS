@@ -1,7 +1,7 @@
 // ============================================================
 // ProceduralGridGenerator.cs  |  Assets/Scripts/Grid/
 //
-// Generación procedural de camino (Path Tracer) — v7
+// Generación procedural de camino (Path Tracer) — v8
 // ────────────────────────────────────────────────────────────
 // ARQUITECTURA DE COMPUERTAS LÓGICAS ESTRICTAS
 //
@@ -10,33 +10,37 @@
 //
 //   ■ COMPUERTA 0 — Especiales: Inicio, Meta, Epílogo.
 //     Tienen prioridad absoluta y saltan todas las demás.
+//     La Meta exige un BaseTile previo como buffer (Regla 2).
 //
 //   ■ COMPUERTA 1 — Candado de Clúster:
-//     Si clusterLeft > 0  →  imprimir _currentActDangerType,
+//     Si clusterLeft > 0  →  imprimir currentClusterType,
 //     decrementar contador. Bloquea giros y portales mientras
 //     el clúster no se haya completado.
 //
 //   ■ COMPUERTA 2 — Padding Universal:
 //     if (lastPlacedType != BaseTile && desired != BaseTile)
-//       → forzar BaseTile.
+//       → forzar BaseTile. NO resetea safeCounter.
 //     Garantiza ≥1 BaseTile entre CUALQUIER par de elementos.
 //
-//   ■ COMPUERTA 3 — Filtro de Acto:
-//     Si desired es un peligro pero ≠ _currentActDangerType
-//       → forzar BaseTile.
-//     Cada acto solo permite UN tipo de peligro.
-//
 //   ■ COMPUERTA 4 — Generación normal:
-//     Si las 3 compuertas anteriores pasan, instanciar el tile
+//     Si las compuertas anteriores pasan, instanciar el tile
 //     solicitado. Si es peligro, arrancar nuevo clúster.
+//     Cada clúster elige su tipo libremente (Regla 1).
+//
+// COMPUERTA 3 eliminada (v8): ambos tipos de peligro están
+// permitidos en el mismo acto. El tipo se sortea por clúster,
+// no por acto. _currentActDangerType se conserva solo para log.
 //
 // Rangos de clúster (Regla 3 — ininterrumpibles):
 //   ChargeTile : Random.Range(3, 7)  →  [3, 6] cubos
 //   LaserTile  : Random.Range(1, 5)  →  [1, 4] cubos
 //
-// Aislamiento por Acto (Regla 1):
-//   Al inicio de cada acto el generador elige _currentActDangerType
-//   (LaserTile o ChargeTile). Cualquier peligro distinto → BaseTile.
+// Garantías adicionales (v8):
+//   • Siempre existen exactamente 3 portales.
+//   • Cada acto tiene al menos un peligro (VerifyActQuota).
+//   • Los clústeres no desbordan al acto siguiente.
+//   • GoalTile siempre precedida de BaseTile.
+//   • ArrowTile nunca se oculta por padding (exitDir revertido).
 // ============================================================
 
 using System;
@@ -76,9 +80,9 @@ namespace Celeris.Grid
         private readonly Dictionary<Vector2Int, TileComponent> _tileMap = new();
         private RuntimeDifficulty _diff;
 
-        // ── Aislamiento por Acto (Regla 1) ───────────────────
-        // Un único tipo de peligro por acto. Se sortea al inicio
-        // de cada acto y se mantiene hasta el siguiente portal.
+        // ── Tipo de peligro del acto actual (solo para logging) ───
+        // v8: ya no filtra la generación. Cada clúster elige su
+        // tipo libremente mediante currentClusterType (local).
         private TileType _currentActDangerType;
 
         // ── PathNode ──────────────────────────────────────────
@@ -108,12 +112,11 @@ namespace Celeris.Grid
 
             OnGridStarted?.Invoke();
 
-            // Semilla aleatoria — cada intento produce un mapa distinto.
             var rng = new System.Random();
 
             int totalTiles = config.GetTotalTiles(_diff.ExtraSegments);
 
-            Debug.Log($"[Generator] v7 | Nivel={config.levelIndex} " +
+            Debug.Log($"[Generator] v8 | Nivel={config.levelIndex} " +
                       $"TotalTiles={totalTiles} " +
                       $"LaserMult={_diff.LaserWeightMultiplier:F1} (seed=random)");
 
@@ -153,28 +156,33 @@ namespace Celeris.Grid
 
             // ══ Estado del generador ══════════════════════════════
             //
-            // lastPlacedType  — tipo del tile colocado en la iteración anterior.
-            //                   Usado exclusivamente por Compuerta 2 (Padding).
+            // lastPlacedType    — tipo del tile colocado en la iteración anterior.
+            //                     Usado por Compuerta 2 (Padding).
             //
-            // clusterLeft     — tiles de peligro que aún quedan por emitir en el
-            //                   clúster actual (0 = sin clúster activo).
-            //                   Cuando > 0, actúa como CANDADO: bloquea giros,
-            //                   portales y cualquier cambio de tipo.
+            // clusterLeft       — tiles de peligro restantes del clúster activo.
+            //                     Cuando > 0, bloquea giros y portales.
             //
-            // safeCounter     — BaseTiles emitidos desde el último evento.
-            //                   Cuando alcanza maxSafeDist, el generador puede
-            //                   intentar arrancar un nuevo clúster de peligro.
+            // currentClusterType — tipo del clúster activo (LaserTile/ChargeTile).
+            //                     [v8] independiente del acto, se sortea por clúster.
             //
-            // inEpilogue      — true tras el 3er portal: solo BaseTile / ArrowTile.
+            // safeCounter       — BaseTiles emitidos desde el último evento.
+            //                     [v8] NO se resetea al hacer padding.
+            //
+            // actHasDanger      — true si el acto actual ya tiene al menos un peligro.
+            //                     [v8] VerifyActQuota lo verifica al llegar al portal.
+            //
+            // inEpilogue        — true tras el 3er portal: solo BaseTile / ArrowTile.
             // ──────────────────────────────────────────────────────
-            TileType lastPlacedType = TileType.BaseTile;
-            int      clusterLeft    = 0;
-            int      safeCounter    = 0;
-            bool     inEpilogue     = false;
+            TileType lastPlacedType    = TileType.BaseTile;
+            int      clusterLeft       = 0;
+            TileType currentClusterType = TileType.BaseTile;  // v8: per-cluster
+            int      safeCounter       = 0;
+            bool     inEpilogue        = false;
+            bool     actHasDanger      = false;               // v8: Bug 4
 
-            // Seleccionar tipo de peligro para el Acto 1.
+            // Tipo sugerido para el Acto 1 (solo log).
             _currentActDangerType = PickActDangerType(rng);
-            Debug.Log($"[Generator] Acto 1 → peligro: {_currentActDangerType}");
+            Debug.Log($"[Generator] Acto 1 → peligro sugerido: {_currentActDangerType}");
 
             occupied.Add(pos);
 
@@ -191,12 +199,11 @@ namespace Celeris.Grid
                     bool canTurn  = straightRun >= minStraightSteps;
                     bool wantTurn = rng.NextDouble() < turnProbability;
 
-                    // CANDADO (Regla 3): mid-clúster → sin giros de ningún tipo.
+                    // CANDADO (Regla 3): mid-clúster → sin giros.
                     if (clusterLeft > 0)
                     { mustTurn = false; wantTurn = false; }
 
-                    // PADDING (Regla 2): no girar si el tile anterior no es BaseTile
-                    // (eso pondría un ArrowTile sin separación).
+                    // PADDING (Regla 2): no girar si el tile anterior no es BaseTile.
                     if (clusterLeft == 0 && lastPlacedType != TileType.BaseTile)
                     { wantTurn = false; if (!blocked) mustTurn = false; }
 
@@ -232,15 +239,17 @@ namespace Celeris.Grid
 
                 if (i == 0)
                 {
-                    // Inicio: BaseTile de arranque. La Regla 2 exige que el
-                    // tile inmediatamente después del inicio sea también BaseTile,
-                    // lo cual se garantiza porque safeCounter=0 < maxSafeDist.
                     type = TileType.BaseTile;
                 }
+
+                // BUG 3 (v8): GoalTile requiere BaseTile inmediatamente anterior.
+                // Si lastPlacedType no es BaseTile, emitir BaseTile aquí como buffer;
+                // el post-procesamiento añadirá GoalTile como nodo extra.
                 else if (isLast)
                 {
-                    // Meta: siempre GoalTile.
-                    type = TileType.GoalTile;
+                    type = (lastPlacedType != TileType.BaseTile)
+                        ? TileType.BaseTile
+                        : TileType.GoalTile;
                 }
 
                 // ════════════════════════════════════════════════
@@ -252,25 +261,21 @@ namespace Celeris.Grid
                     if (turned && lastPlacedType == TileType.BaseTile)
                         type = TileType.ArrowTile;
                     else
-                        type = TileType.BaseTile;   // Padding o recto → BaseTile
+                        type = TileType.BaseTile;
                 }
 
                 // ════════════════════════════════════════════════
                 //  COMPUERTA 1 — Candado de Clúster
                 //
-                //  Si clusterLeft > 0, el generador DEBE emitir el
-                //  tipo de peligro del acto sin excepción.
-                //  Ninguna otra compuerta puede interrumpirlo.
+                //  v8: usa currentClusterType (por clúster),
+                //  no _currentActDangerType (por acto).
                 // ════════════════════════════════════════════════
 
                 else if (clusterLeft > 0)
                 {
-                    type = _currentActDangerType;
+                    type = currentClusterType;   // BUG 1 fix
                     clusterLeft--;
 
-                    // Al terminar el clúster, resetear safeCounter para que
-                    // la Compuerta 4 emita un BaseTile de buffer en la próxima
-                    // iteración (safeCounter=0 < maxSafeDist → desired=BaseTile).
                     if (clusterLeft == 0)
                         safeCounter = 0;
                 }
@@ -278,18 +283,39 @@ namespace Celeris.Grid
                 // ════════════════════════════════════════════════
                 //  Portal (posición absoluta, solo en segmentos rectos)
                 //
-                //  Se evalúa DESPUÉS del candado de clúster para que
-                //  un clúster activo no sea interrumpido por un portal.
+                //  BUG 4 (v8): VerifyActQuota — si el acto no tiene
+                //  ningún peligro, convertir el último BaseTile del
+                //  acto a danger antes de colocar el portal.
+                //
+                //  BUG 2 (v8): NO resetear safeCounter en padding.
                 // ════════════════════════════════════════════════
 
                 else if (!turned && nextPortalIdx < 3 && i >= portalTargets[nextPortalIdx])
                 {
-                    // COMPUERTA 2 aplicada al portal:
-                    // Si el tile anterior no es BaseTile, insertar buffer primero.
+                    // BUG 4: verificar cuota ANTES del padding
+                    if (!actHasDanger && lastPlacedType == TileType.BaseTile)
+                    {
+                        for (int ni = nodes.Count - 1; ni >= 0; ni--)
+                        {
+                            if (nodes[ni].Type == TileType.BaseTile)
+                            {
+                                TileType quota = PickActDangerType(rng);
+                                var n = nodes[ni];
+                                nodes[ni]    = new PathNode(n.Coord, quota, n.ExitDir);
+                                actHasDanger = true;
+                                // Actualizar lastPlacedType si era el nodo más reciente
+                                if (ni == nodes.Count - 1) lastPlacedType = quota;
+                                Debug.Log($"[Generator] VerifyActQuota: nodo {ni} → {quota}");
+                                break;
+                            }
+                        }
+                    }
+
+                    // Padding antes del portal
                     if (lastPlacedType != TileType.BaseTile)
                     {
                         type = TileType.BaseTile;
-                        safeCounter = 0;
+                        // BUG 2: NO resetear safeCounter
                         // nextPortalIdx NO se incrementa — el portal se reintenta en i+1.
                     }
                     else
@@ -297,16 +323,15 @@ namespace Celeris.Grid
                         type = TileType.PortalTile;
                         nextPortalIdx++;
 
-                        // Reset completo para el siguiente acto.
                         clusterLeft  = 0;
                         safeCounter  = 0;
+                        actHasDanger = false;   // BUG 4: reset para el siguiente acto
 
                         if (nextPortalIdx < 3)
                         {
-                            // Seleccionar nuevo tipo de peligro para el siguiente acto.
                             _currentActDangerType = PickActDangerType(rng);
                             Debug.Log($"[Generator] Acto {nextPortalIdx + 1} " +
-                                      $"→ peligro: {_currentActDangerType}");
+                                      $"→ peligro sugerido: {_currentActDangerType}");
                         }
                         else
                         {
@@ -319,34 +344,36 @@ namespace Celeris.Grid
                 // ════════════════════════════════════════════════
                 //  Giro → ArrowTile
                 //
-                //  COMPUERTA 2 aplicada a giros: si lastPlaced no es
-                //  BaseTile, se coloca BaseTile en su lugar (el giro
-                //  físico se mantiene, pero sin el ArrowTile visual).
-                //  Esto solo ocurre en bloqueos físicos extremos.
+                //  BUG 6 (v8): si el padding impide colocar ArrowTile,
+                //  revertir exitDir (seguir recto) para que la flecha
+                //  aparezca en la siguiente iteración con BaseTile previo.
+                //  BUG 2 (v8): NO resetear safeCounter.
                 // ════════════════════════════════════════════════
 
                 else if (turned)
                 {
                     if (lastPlacedType != TileType.BaseTile)
                     {
-                        // Padding: no se puede colocar ArrowTile aquí.
-                        // Colocar BaseTile en la dirección del giro.
-                        type = TileType.BaseTile;
-                        safeCounter = 0;
-                        Debug.LogWarning($"[Generator] i={i}: Padding forzó BaseTile en giro " +
-                                         $"(lastPlaced={lastPlacedType}). ArrowTile diferido.");
+                        // BUG 6: revertir giro — la flecha aparecerá en la iteración siguiente
+                        exitDir = dir;
+                        turned  = false;
+                        type    = TileType.BaseTile;
+                        // BUG 2: NO resetear safeCounter
+                        Debug.LogWarning($"[Generator] i={i}: Padding → BaseTile, giro diferido " +
+                                         $"(lastPlaced={lastPlacedType}).");
                     }
                     else
                     {
                         type = TileType.ArrowTile;
-                        // El post-arrow es responsabilidad de la Compuerta 2 en la
-                        // siguiente iteración: lastPlaced=ArrowTile + desired≠Base → Base.
-                        // No hace falta forcedBaseTilesLeft.
                     }
                 }
 
                 // ════════════════════════════════════════════════
-                //  COMPUERTAS 2, 3 y 4 — Generación normal
+                //  COMPUERTAS 2 y 4 — Generación normal
+                //
+                //  COMPUERTA 3 eliminada (v8 — BUG 1):
+                //  el generador elige el tipo de peligro libremente
+                //  en cada clúster; no hay restricción por acto.
                 // ════════════════════════════════════════════════
 
                 else
@@ -355,36 +382,20 @@ namespace Celeris.Grid
                     TileType desired;
                     if (safeCounter < maxSafeDist)
                     {
-                        // Zona segura: seguir emitiendo BaseTiles.
                         desired = TileType.BaseTile;
                     }
                     else
                     {
-                        // Zona segura agotada: intentar iniciar clúster.
-                        desired = _currentActDangerType;
+                        // BUG 1 (v8): elegir tipo libremente (no forzado por acto)
+                        desired = PickActDangerType(rng);
                     }
 
                     // ── COMPUERTA 2 — Padding Universal ──────────
-                    // Si el tile anterior no es BaseTile y el deseado
-                    // tampoco lo es → forzar BaseTile de separación.
+                    // BUG 2 (v8): NO resetear safeCounter al forzar padding.
                     if (lastPlacedType != TileType.BaseTile && desired != TileType.BaseTile)
                     {
                         type = TileType.BaseTile;
-                        safeCounter = 0;
-                    }
-
-                    // ── COMPUERTA 3 — Filtro de Acto ─────────────
-                    // Si el desired es peligro pero no coincide con el
-                    // tipo del acto → forzar BaseTile.
-                    // (Con _currentActDangerType esto nunca debería
-                    //  dispararse, pero actúa como red de seguridad.)
-                    else if (desired != TileType.BaseTile &&
-                             desired != _currentActDangerType)
-                    {
-                        type = TileType.BaseTile;
-                        safeCounter = 0;
-                        Debug.LogWarning($"[Generator] i={i}: Filtro de Acto bloqueó " +
-                                         $"{desired} (acto permite {_currentActDangerType}).");
+                        // safeCounter se mantiene — el clúster arranca en la iteración siguiente
                     }
 
                     // ── COMPUERTA 4 — Instanciar tile solicitado ──
@@ -398,17 +409,36 @@ namespace Celeris.Grid
                         }
                         else
                         {
-                            // Arrancar clúster de peligro.
-                            // El primer tile se emite ahora; clusterLeft = tamaño - 1.
+                            // Calcular tamaño del clúster
                             int clusterSize = (type == TileType.ChargeTile)
                                 ? rng.Next(3, 7)   // ChargeTile: [3, 6]
                                 : rng.Next(1, 5);  // LaserTile:  [1, 4]
 
-                            clusterLeft = clusterSize - 1;
-                            safeCounter = 0;
+                            // BUG 5 (v8): no iniciar clúster si desborda al siguiente acto.
+                            // Necesitamos: clúster + 1 buffer BaseTile antes del portal.
+                            bool overflow = (nextPortalIdx < 3) &&
+                                            (clusterSize >= portalTargets[nextPortalIdx] - i - 1);
 
-                            Debug.Log($"[Generator] i={i}: Clúster {type} ×{clusterSize} " +
-                                      $"(acto {nextPortalIdx + 1})");
+                            if (overflow)
+                            {
+                                // Diferir el clúster; emitir BaseTile y esperar al siguiente acto
+                                type = TileType.BaseTile;
+                                safeCounter++;
+                                Debug.Log($"[Generator] i={i}: Clúster diferido por overflow " +
+                                          $"(tilesHastaPortal={portalTargets[nextPortalIdx] - i}, " +
+                                          $"clusterSize={clusterSize})");
+                            }
+                            else
+                            {
+                                // BUG 1 (v8): guardar tipo del clúster (independiente del acto)
+                                currentClusterType = type;
+                                clusterLeft        = clusterSize - 1;
+                                safeCounter        = 0;
+                                actHasDanger       = true;   // BUG 4
+
+                                Debug.Log($"[Generator] i={i}: Clúster {type} ×{clusterSize} " +
+                                          $"(acto {nextPortalIdx + 1})");
+                            }
                         }
                     }
                 }
@@ -424,12 +454,34 @@ namespace Celeris.Grid
                 pos = pos + exitDir;
             }
 
-            // Garantía absoluta: el último nodo siempre es GoalTile.
+            // ── Post-procesamiento: garantizar [BaseTile] → [GoalTile] ──
+            //
+            // BUG 3 (v8): Si el último nodo es BaseTile (buffer insertado porque
+            // lastPlacedType era peligro en isLast), añadir GoalTile como nodo extra.
+            // Si ya es GoalTile, no hace falta nada.
             if (nodes.Count > 0)
             {
                 var last = nodes[nodes.Count - 1];
-                nodes[nodes.Count - 1] = new PathNode(
-                    last.Coord, TileType.GoalTile, last.ExitDir);
+
+                if (last.Type == TileType.GoalTile)
+                {
+                    // Correcto — GoalTile ya está en su lugar.
+                }
+                else if (last.Type == TileType.BaseTile)
+                {
+                    // El buffer ya está; añadir GoalTile un paso adelante.
+                    Vector2Int goalCoord = last.Coord + DirToVector(last.ExitDir);
+                    nodes.Add(new PathNode(goalCoord, TileType.GoalTile, last.ExitDir));
+                    Debug.Log($"[Generator] Post: GoalTile añadido en {goalCoord} tras buffer.");
+                }
+                else
+                {
+                    // Caso extremo: forzar GoalTile en el último nodo.
+                    nodes[nodes.Count - 1] = new PathNode(
+                        last.Coord, TileType.GoalTile, last.ExitDir);
+                    Debug.LogWarning($"[Generator] Post: GoalTile forzado en {last.Coord} " +
+                                     $"(lastType={last.Type}).");
+                }
             }
 
             return nodes;
@@ -440,7 +492,7 @@ namespace Celeris.Grid
         // ══════════════════════════════════════════════════════
 
         /// <summary>
-        /// Sortea el tipo de peligro para un acto.
+        /// Sortea el tipo de peligro para un acto o un clúster.
         /// Usa el peso de dificultad del config para favorecer Láser en niveles altos.
         /// </summary>
         private TileType PickActDangerType(System.Random rng)
@@ -471,7 +523,6 @@ namespace Celeris.Grid
                 {
                     case TileType.LaserTile:
                         var lc = go.AddComponent<LaserController>();
-                        // 2/3 de los láseres empiezan activos → no punish inmediato.
                         lc.Configure(
                             active:           _diff.LaserActiveDuration,
                             inactive:         _diff.LaserInactiveDuration,
@@ -528,10 +579,6 @@ namespace Celeris.Grid
         //  HELPERS DE DIRECCIÓN
         // ══════════════════════════════════════════════════════
 
-        /// <summary>
-        /// Valida que el destino (pos+dir) no esté ocupado y no sea adyacente
-        /// lateralmente a otro tile del camino (garantía anti-Snake).
-        /// </summary>
         private static bool IsDirValid(Vector2Int pos, Vector2Int dir, HashSet<Vector2Int> occ)
         {
             Vector2Int next = pos + dir;
@@ -545,7 +592,7 @@ namespace Celeris.Grid
             };
             foreach (var n in neighbors)
             {
-                if (n == pos) continue;   // predecesor inmediato — permitido
+                if (n == pos) continue;
                 if (occ.Contains(n)) return false;
             }
             return true;
@@ -559,7 +606,7 @@ namespace Celeris.Grid
             var a = lf ? L : R; var b = lf ? R : L;
             if (IsDirValid(pos, a, occ)) return a;
             if (IsDirValid(pos, b, occ)) return b;
-            return dir;   // fallback: seguir recto
+            return dir;
         }
 
         private Vector2Int FindFreeDir(Vector2Int pos, Vector2Int dir,
@@ -586,6 +633,19 @@ namespace Celeris.Grid
             if (v.x > 0) return MoveDirection.East;
             return MoveDirection.West;
         }
+
+        /// <summary>
+        /// Convierte MoveDirection a Vector2Int. Inverso de VectorToDir.
+        /// Necesario para el post-procesamiento de GoalTile (Bug 3).
+        /// </summary>
+        private static Vector2Int DirToVector(MoveDirection d) => d switch
+        {
+            MoveDirection.North => new Vector2Int( 0,  1),
+            MoveDirection.South => new Vector2Int( 0, -1),
+            MoveDirection.East  => new Vector2Int( 1,  0),
+            MoveDirection.West  => new Vector2Int(-1,  0),
+            _                   => Vector2Int.zero
+        };
 
         // ── API de consulta ───────────────────────────────────
         public TileComponent GetTile(Vector2Int coord) =>

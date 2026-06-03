@@ -22,6 +22,8 @@ namespace Celeris.UI
         [Header("Textos")]
         public TMP_Text levelNumText;
         public TMP_Text starsText;
+        [Tooltip("Texto opcional para mostrar el mejor puntaje del nivel (puede ser null)")]
+        public TMP_Text scoreText;
 
         [Header("Estado visual")]
         public GameObject lockIcon;   // GameObject con candado (se activa si locked)
@@ -35,7 +37,7 @@ namespace Celeris.UI
 
         // ─────────────────────────────────────────────────────
         public void Setup(int levelNumber, int stars, bool isLocked,
-                          bool isCurrent, System.Action onClick)
+                          bool isCurrent, System.Action onClick, int bestScore = 0)
         {
             // Número del nivel
             if (levelNumText != null)
@@ -44,6 +46,10 @@ namespace Celeris.UI
             // Estrellas (★ llena / ☆ vacía)
             if (starsText != null)
                 starsText.text = BuildStarString(stars, maxStars: 3);
+
+            // Mejor puntaje del nivel
+            if (scoreText != null)
+                scoreText.text = bestScore > 0 ? $"{bestScore} pts" : "";
 
             // Ícono de candado
             if (lockIcon != null)

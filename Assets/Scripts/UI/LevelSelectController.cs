@@ -80,16 +80,18 @@ namespace Celeris.UI
                 var btn  = go.GetComponent<LevelButtonUI>();
                 if (btn == null) btn = go.AddComponent<LevelButtonUI>();
 
-                int stars    = GetStarsForLevel(i);
-                bool locked  = (i > maxUnlocked);
-                bool current = (i == LevelManager.CurrentLevelNumber);
+                int  stars     = GetStarsForLevel(i);
+                int  bestScore = GetBestScoreForLevel(i);
+                bool locked    = (i > maxUnlocked);
+                bool current   = (i == LevelManager.CurrentLevelNumber);
 
                 btn.Setup(
                     levelNumber : i,
                     stars       : stars,
                     isLocked    : locked,
                     isCurrent   : current,
-                    onClick     : () => OnLevelSelected(i)  // captura correcta con variable local
+                    onClick     : () => OnLevelSelected(i),  // captura correcta con variable local
+                    bestScore   : bestScore
                 );
             }
         }
@@ -119,9 +121,14 @@ namespace Celeris.UI
         }
 
         // ── Helpers de progreso ───────────────────────────────
-        // Lee directamente de PlayerPrefs con las mismas claves que ScoreManager
+        // Leen directamente de PlayerPrefs con las mismas claves que ScoreManager
         private static int GetStarsForLevel(int levelNumber) =>
             PlayerPrefs.GetInt($"LevelStars_{levelNumber}", 0);
+
+        // Nota: LevelButtonUI usa índice 0-based para LevelBestScore pero
+        // LevelSelectController itera levelNumber (1-based). El índice es levelNumber-1.
+        private static int GetBestScoreForLevel(int levelNumber) =>
+            PlayerPrefs.GetInt($"LevelBestScore_{levelNumber - 1}", 0);
 
         private static int PlayerPrefsMaxUnlocked() =>
             PlayerPrefs.GetInt("MaxUnlockedLevel", 0);

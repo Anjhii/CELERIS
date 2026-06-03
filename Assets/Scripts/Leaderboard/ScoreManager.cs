@@ -52,13 +52,29 @@ public class ScoreManager : MonoBehaviour
     public int TimesPlayed      => PlayerPrefs.GetInt(KEY_TIMES_PLAYED, 0);
     public int TotalStars       => PlayerPrefs.GetInt(KEY_TOTAL_STARS,  0);
 
-    /// <summary>Mejor puntaje conseguido en un nivel concreto.</summary>
+    /// <summary>Mejor puntaje conseguido en un nivel concreto (índice 0-based).</summary>
     public int GetBestScoreForLevel(int levelIndex) =>
         PlayerPrefs.GetInt($"LevelBestScore_{levelIndex}", 0);
 
     /// <summary>Estrellas obtenidas en un nivel concreto (0-3).</summary>
     public int GetStarsForLevel(int levelIndex) =>
         PlayerPrefs.GetInt($"LevelStars_{levelIndex}", 0);
+
+    /// <summary>
+    /// Suma los mejores puntajes de todos los niveles completados.
+    /// Este es el valor que se envía al leaderboard global.
+    /// </summary>
+    public long GetTotalCumulativeScore()
+    {
+        long total = 0;
+        for (int i = 0; ; i++)
+        {
+            string key = $"LevelBestScore_{i}";
+            if (!PlayerPrefs.HasKey(key)) break;
+            total += PlayerPrefs.GetInt(key, 0);
+        }
+        return total;
+    }
 
     // ─────────────────────────────────────────────────────────────────────────────
     private void Awake()
@@ -161,8 +177,10 @@ public class ScoreManager : MonoBehaviour
 
         PlayerPrefs.Save();
 
-        // ── Score global (leaderboard) ────────────────────────────────────────
-        EvaluateHighScore(result.score);
+        // ── Score global acumulado (suma de mejores puntajes de todos los niveles) ─
+        // El leaderboard muestra el total acumulado, no el score de un único nivel.
+        long cumulativeScore = GetTotalCumulativeScore();
+        EvaluateHighScore(cumulativeScore);
 
         // ── Sincronizar todo con Supabase ─────────────────────────────────────
         if (SupabaseManager.Instance != null)

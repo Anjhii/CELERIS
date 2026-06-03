@@ -106,11 +106,13 @@ namespace Celeris.UI
             var droide = FindObjectOfType<Player.DroideController>();
             if (droide == null) return;
 
+            // DeathCause.Generic = fallo en el minijuego (3 intentos agotados).
             GameOverReason reason = droide.LastDeathCause switch
             {
                 DeathCause.Battery => GameOverReason.Battery,
                 DeathCause.Laser   => GameOverReason.Laser,
                 DeathCause.Fall    => GameOverReason.Fall,
+                DeathCause.Generic => GameOverReason.MinigameFail,
                 _                  => GameOverReason.Custom
             };
 
@@ -118,6 +120,18 @@ namespace Celeris.UI
         }
 
         // ── API pública ───────────────────────────────────────
+
+        /// <summary>
+        /// Garantiza que el singleton existe aunque LoginScene no se haya cargado.
+        /// Llamado por GameFlowManager.EnsureSingletons().
+        /// </summary>
+        public static void EnsureExists()
+        {
+            if (Instance != null) return;
+            var go = new GameObject("[GameOverController-Auto]");
+            go.AddComponent<GameOverController>();
+            Debug.Log("[GameOverController] Instancia auto-creada por GameFlowManager.");
+        }
 
         /// <summary>Muestra el panel de Game Over.</summary>
         public static void Show(GameOverReason reason, string customMessage = null)
@@ -157,11 +171,11 @@ namespace Celeris.UI
         private static string BuildReasonText(GameOverReason reason, string custom) =>
             reason switch
             {
-                GameOverReason.Battery     => "Sin energía",
-                GameOverReason.Laser       => "Alcanzado por el láser",
-                GameOverReason.Fall        => "Caída al vacío",
-                GameOverReason.MinigameFail => "Fallo en el minijuego",
-                GameOverReason.Custom      => custom ?? "Error desconocido",
+                GameOverReason.Battery     => "CONEXIÓN: <color=#9629A5>BATERÍA AGOTADA</color>", // Morado
+                GameOverReason.Laser       => "NÚCLEO: <color=#FF001A>DESTRUIDO POR LÁSER</color>", // Rojo
+                GameOverReason.Fall        => "ALERTA: <color=#FF001A>IMPACTO POR CAÍDA</color>", // Rojo
+                GameOverReason.MinigameFail => "STATE: <color=#FF001A>ACCESS DENIED</color>", // El "Fallo en el juego" pedido en Rojo Puro
+                GameOverReason.Custom      => custom ?? "ERROR: <color=#9629A5>CÓDIGO TERMINAL CORRUPTO</color>", // Morado
                 _                          => ""
             };
 
@@ -183,45 +197,72 @@ namespace Celeris.UI
         }
 
         // ── Construcción de UI en runtime ─────────────────────
+        // ── Construcción de UI en runtime (Estilo Ciberpunk Mejorado) ──
+        // ── Construcción de UI: Edición Dark Ciberpunk (Negro, Morado y Rojo) ──
+
+        // ── Construcción de UI Minimalista Sin Fondos Rojos ──
         private void BuildUI()
         {
-            // Canvas raíz
+            // 1. Canvas raíz
             var canvasGo = new GameObject("GameOverCanvas");
             canvasGo.transform.SetParent(transform);
             _canvas = canvasGo.AddComponent<Canvas>();
             _canvas.renderMode  = RenderMode.ScreenSpaceOverlay;
-            _canvas.sortingOrder = 999;   // siempre encima
+            _canvas.sortingOrder = 999; 
 
             canvasGo.AddComponent<CanvasScaler>().uiScaleMode =
                 CanvasScaler.ScaleMode.ScaleWithScreenSize;
             canvasGo.AddComponent<GraphicRaycaster>();
 
-            // Panel semi-transparente
-            _panel = CreatePanel(canvasGo.transform,
-                new Color(0f, 0f, 0f, 0.82f));
+            // 2. Fondo Completo de la Pantalla (Negro absoluto muy elegante)
+            var background = CreatePanel(canvasGo.transform, new Color(0.02f, 0.0f, 0.03f, 0.96f));
 
-            // Título
-            _titleText = CreateText(_panel.transform, "GAME OVER",
-                fontSize: 52, bold: true,
-                anchorMin: new Vector2(0.1f, 0.62f), anchorMax: new Vector2(0.9f, 0.80f));
-            _titleText.color = new Color(1f, 0.25f, 0.20f);
+            // 3. Contenedor Central (Completamente transparente para evitar cualquier cuadrado de fondo)
+            var frameGo = new GameObject("CentralFrame");
+            frameGo.transform.SetParent(background.transform, false);
+            var frameImg = frameGo.AddComponent<Image>();
+            frameImg.color = Color.clear; // <-- TRANSPARENTE, sin bloques de fondo
+            
+            var frameRt = frameGo.GetComponent<RectTransform>();
+            frameRt.anchorMin = new Vector2(0.25f, 0.20f); 
+            frameRt.anchorMax = new Vector2(0.75f, 0.80f);
+            frameRt.offsetMin = frameRt.offsetMax = Vector2.zero;
+            _panel = background;
 
-            // Razón
-            _reasonText = CreateText(_panel.transform, "",
-                fontSize: 28, bold: false,
-                anchorMin: new Vector2(0.1f, 0.50f), anchorMax: new Vector2(0.9f, 0.62f));
-            _reasonText.color = new Color(0.9f, 0.9f, 0.9f);
+            // 4. Borde Perimetral Sutil (Opcional: Morado muy oscuro para encuadrar, sin rojo)
+            var borderGo = new GameObject("FrameBorder");
+            borderGo.transform.SetParent(frameGo.transform, false);
+            var borderImg = borderGo.AddComponent<Image>();
+            borderImg.color = new Color(0.3f, 0.1f, 0.5f, 0.2f); // Morado translúcido muy suave
+            var borderRt = borderGo.GetComponent<RectTransform>();
+            borderRt.anchorMin = Vector2.zero;
+            borderRt.anchorMax = Vector2.one;
+            borderRt.offsetMin = new Vector2(-1, -1); 
+            borderRt.offsetMax = new Vector2(1, 1);
+            borderGo.transform.SetAsFirstSibling();
 
-            // Botón Reintentar
-            _retryButton = CreateButton(_panel.transform, "REINTENTAR",
-                anchorMin: new Vector2(0.20f, 0.30f), anchorMax: new Vector2(0.48f, 0.46f),
-                bgColor: new Color(0.15f, 0.60f, 1f),
+            // 5. Título principal: GAME OVER (Solo el Texto en Rojo Neón, sin cajas de fondo)
+            _titleText = CreateText(frameGo.transform, "GAME OVER",
+                fontSize: 56, bold: true,
+                anchorMin: new Vector2(0.05f, 0.72f), anchorMax: new Vector2(0.95f, 0.90f));
+            _titleText.color = new Color(1.0f, 0.0f, 0.1f); // Letras en Rojo Puro de Alerta
+
+            // 6. Mensaje de Fallo Dinámico (Texto en gris/morado suave)
+            _reasonText = CreateText(frameGo.transform, "",
+                fontSize: 24, bold: false,
+                anchorMin: new Vector2(0.05f, 0.45f), anchorMax: new Vector2(0.95f, 0.65f));
+            _reasonText.color = new Color(0.6f, 0.5f, 0.7f); 
+
+            // 7. Botón REINTENTAR (Texto flotante Rojo Neón - Sin caja ni fondo)
+            _retryButton = CreateButton(frameGo.transform, "RETRY",
+                anchorMin: new Vector2(0.15f, 0.15f), anchorMax: new Vector2(0.45f, 0.32f),
+                textColor: new Color(1.0f, 0.0f, 0.1f), // Texto Rojo
                 onClick: OnRetry);
 
-            // Botón Menú
-            _menuButton = CreateButton(_panel.transform, "MENÚ PRINCIPAL",
-                anchorMin: new Vector2(0.52f, 0.30f), anchorMax: new Vector2(0.80f, 0.46f),
-                bgColor: new Color(0.35f, 0.35f, 0.35f),
+            // 8. Botón MENÚ PRINCIPAL (Texto flotante Morado Tecnológico - Sin caja ni fondo)
+            _menuButton = CreateButton(frameGo.transform, "MAIN MENU",
+                anchorMin: new Vector2(0.55f, 0.15f), anchorMax: new Vector2(0.85f, 0.32f),
+                textColor: new Color(0.6f, 0.3f, 0.9f), // Texto Morado
                 onClick: OnMenu);
         }
 
@@ -256,15 +297,17 @@ namespace Celeris.UI
             return tmp;
         }
 
+        // Helper de botón corregido: Ya no pide 'bgColor' y el fondo es 100% transparente
         private Button CreateButton(Transform parent, string label,
-            Vector2 anchorMin, Vector2 anchorMax,
-            Color bgColor, System.Action onClick)
+            Vector2 anchorMin, Vector2 anchorMax, Color textColor, System.Action onClick)
         {
-            var go  = new GameObject($"Btn_{label}");
+            var go = new GameObject($"Btn_{label}");
             go.transform.SetParent(parent, false);
 
+            // Añadimos Image pero completamente transparente (Color.clear)
+            // Esto es obligatorio en Unity para que el botón mantenga su "zona de clic" activa
             var img = go.AddComponent<Image>();
-            img.color = bgColor;
+            img.color = Color.clear;
 
             var btn = go.AddComponent<Button>();
             var cb  = new Button.ButtonClickedEvent();
@@ -276,15 +319,16 @@ namespace Celeris.UI
             rt.anchorMax = anchorMax;
             rt.offsetMin = rt.offsetMax = Vector2.zero;
 
-            // Texto del botón
+            // Texto interno flotante del botón
             var textGo = new GameObject("Label");
             textGo.transform.SetParent(go.transform, false);
             var tmp    = textGo.AddComponent<TextMeshProUGUI>();
-            tmp.text   = label;
-            tmp.fontSize = 22;
+            tmp.text    = label;
+            tmp.fontSize = 22; 
             tmp.fontStyle = FontStyles.Bold;
             tmp.alignment = TextAlignmentOptions.Center;
-            tmp.color  = Color.white;
+            tmp.color  = textColor; // Aquí se aplica tu Rojo o Morado Neón
+            
             var trt    = textGo.GetComponent<RectTransform>();
             trt.anchorMin = Vector2.zero;
             trt.anchorMax = Vector2.one;

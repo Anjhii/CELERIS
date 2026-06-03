@@ -22,6 +22,11 @@ namespace Celeris.Player
         {
             // Restaurar duración de paso normal
             ctx.SetMoveDurationOverride(-1f);   // -1 = usar valor base
+
+            // BUG FIX: restaurar movimiento si el jugador sigue presionando.
+            // Sin esto, FrictionMovementState.Exit() deja _shouldMove=false
+            // y el droide se detiene aunque el jugador no haya soltado.
+            ctx.SetShouldMove(ctx.IsInputHeld);
         }
 
         public void Exit(DroideController ctx)

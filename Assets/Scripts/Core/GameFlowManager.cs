@@ -39,6 +39,7 @@ using System.Collections;
 using Celeris.Data;
 using Celeris.Grid;
 using Celeris.Player;
+using Celeris.UI;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -102,6 +103,10 @@ namespace Celeris.Core
                 if (droide != null) Subscribe();
                 else Debug.LogError("[GameFlowManager] DroideController no encontrado.");
             }
+
+            // Reiniciar el puntaje de sesión al comenzar el nivel.
+            // Los puntos de cada portal (ScoreManager.AddPoints) se acumulan desde 0.
+            ScoreManager.Instance?.ResetCurrentScore();
         }
 
         // ── Suscripciones al Droide ───────────────────────────
@@ -126,9 +131,44 @@ namespace Celeris.Core
 
         private IEnumerator VictorySequence()
         {
+            int levelIdx = LevelManager.CurrentLevelIndex;
             Debug.Log($"[GameFlowManager] Victoria en nivel {LevelManager.CurrentLevelNumber}.");
+
+            // Registrar resultado: guarda el mejor score del nivel y actualiza
+            // el score acumulado del leaderboard global.
+            var sm = ScoreManager.Instance;
+            if (sm != null)
+            {
+                int finalScore = (int)sm.CurrentScore;
+                int stars      = CalculateStars(finalScore);
+                int battery    = droide != null ? droide.Battery : 0;
+
+                sm.RecordLevelResult(new LevelResult
+                {
+                    levelIndex    = levelIdx,
+                    score         = finalScore,
+                    stars         = stars,
+                    batteryLeft   = battery,
+                    isVictory     = true,
+                });
+
+                Debug.Log($"[GameFlowManager] Score nivel {levelIdx + 1}: {finalScore} pts, {stars}★");
+            }
+
             yield return new WaitForSeconds(victoryDelay);
             LevelManager.EnsureExists().AdvanceLevel();
+        }
+
+        /// <summary>
+        /// Calcula estrellas según el score acumulado del nivel (3 portales).
+        /// Máximo teórico: 300 pts (100×3 primeros intentos).
+        /// </summary>
+        private static int CalculateStars(int score)
+        {
+            if (score >= 250) return 3;
+            if (score >= 150) return 2;
+            if (score >    0) return 1;
+            return 0;
         }
 
         // ── Portal: entrada ───────────────────────────────────
@@ -296,6 +336,8 @@ namespace Celeris.Core
                 var go = new GameObject("[GameStateManager-Auto]");
                 go.AddComponent<GameStateManager>();
             }
+            // Garantizar GameOverController aunque LoginScene no se haya cargado.
+            GameOverController.EnsureExists();
         }
 
         private void AutoConnect()

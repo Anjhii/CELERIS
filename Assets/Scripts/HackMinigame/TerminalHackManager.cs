@@ -189,8 +189,17 @@ public class TerminalHackManager : MonoBehaviour
             sessionData.extractedDigit    = Random.Range(0, 10);
             HackedTerminalsCount++;
 
+            int reward = sessionData.CalculateScoreReward();
             Debug.Log($"<color=green>[HACK EXITOSO]</color> Terminal {HackedTerminalsCount}/{RequiredHacks}. " +
-                      $"Recompensa: {sessionData.CalculateScoreReward()} pts.");
+                      $"Recompensa: {reward} pts.");
+
+            // Acumular puntos en el ScoreManager para este nivel.
+            // Los 3 portales suman: 100+100+100 (primer intento) hasta 25+25+25.
+            if (ScoreManager.Instance != null)
+                ScoreManager.Instance.AddPoints(reward);
+            else
+                Debug.LogWarning("[TerminalHackManager] ScoreManager no encontrado — puntos no registrados.");
+
             ExitScene();
         }
         else
@@ -263,6 +272,13 @@ public class TerminalHackManager : MonoBehaviour
         // y muestre el panel de Game Over en-juego. NO usar SceneManager.LoadScene aquí
         // (causaría congelamiento si la escena de destino no existe).
         Time.timeScale = 1f;
+
+        // Resetear sesión ANTES de notificar: la próxima vez que el jugador
+        // entre a un portal (tras reintentar el nivel), la sesión estará limpia.
+        // Sin esto, InitializeTerminalHack() ve currentAttempt > 3 y dispara
+        // game over inmediatamente en el siguiente intento.
+        sessionData.ResetForNewTerminal();
+
         OnHackGameOver?.Invoke();
     }
 }
