@@ -1,7 +1,10 @@
 // ============================================================
 // MobileInputHandler.cs  |  Assets/Scripts/Input/
 //
-// v4 — Rediseñado para hold-to-move + multi-tap.
+// v5 — Solo gestión de OnPressStart/End y pulso eléctrico.
+//       El hold-to-rotate lo maneja exclusivamente
+//       DroideController.HandleHoldAndPulse() para evitar
+//       doble rotación.
 //
 // ESCENA: Adjuntar a un Button UI de pantalla completa
 //         (Image transparente, Raycast Target = ON) en GameplayScene.
@@ -16,9 +19,6 @@
 // • Soltar (PointerUp) → droide.OnPressEnd()
 //     – NormalMovementState: detiene inmediatamente el Droide.
 //     – FrictionMovementState: no interrumpe (el Droide sigue su inercia).
-//
-// • Hold largo (> holdThreshold sin soltar) → RotateCurrentArrow
-//     Disponible solo en estado normal (no en fricción).
 //
 // • Pulso eléctrico: si hay láser adyacente + cooldown expirado,
 //   se dispara automáticamente junto con OnPressStart.
@@ -38,10 +38,6 @@ namespace Celeris.Input
         [Header("Droide")]
         public DroideController droide;
 
-        [Header("Hold para rotar flecha")]
-        [Tooltip("Segundos de press continuo para activar rotación de flecha")]
-        public float holdThreshold = 0.45f;
-
         [Header("Pulso Eléctrico")]
         [Tooltip("Cooldown en segundos entre pulsos eléctricos")]
         public float pulseCooldown = 3.0f;
@@ -54,7 +50,6 @@ namespace Celeris.Input
         // ── Privado ───────────────────────────────────────────
         private float _pressDownTime = 0f;
         private bool  _isPressed     = false;
-        private bool  _holdFired     = false;
         private float _lastPulseTime = -999f;
 
         // ── Lifecycle ─────────────────────────────────────────
@@ -83,7 +78,6 @@ namespace Celeris.Input
         public void OnPointerDown(PointerEventData _)
         {
             _pressDownTime = Time.unscaledTime;
-            _holdFired     = false;
             _isPressed     = true;
 
             if (droide == null) return;
@@ -102,7 +96,7 @@ namespace Celeris.Input
         {
             if (!_isPressed) return;
             _isPressed = false;
-            if (droide == null || _holdFired) return;
+            if (droide == null) return;
 
             if (droide.State == DroideState.Charging)
             {
@@ -124,23 +118,13 @@ namespace Celeris.Input
             droide.OnPressEnd();
         }
 
-        // ── Update: hold para rotar flecha ───────────────────
+        // ── Update: solo feedback visual del pulso ───────────
+        // NOTA: El hold-to-rotate lo gestiona exclusivamente
+        // DroideController.HandleHoldAndPulse() para evitar
+        // doble rotación (MobileInputHandler + HandleHoldAndPulse
+        // se disparaban ambos en el mismo frame).
         private void Update()
         {
-            if (!_isPressed || _holdFired || droide == null) return;
-            if (droide.State == DroideState.Dead    ||
-                droide.State == DroideState.Victory ||
-                droide.State == DroideState.AtPortal) return;
-
-            float heldTime = Time.unscaledTime - _pressDownTime;
-            if (heldTime >= holdThreshold)
-            {
-                _holdFired = true;
-                // Avisar al droide para que deje de moverse mientras rota
-                droide.OnPressEnd();
-                droide.RotateCurrentArrow();
-            }
-
             UpdatePulseVisual();
         }
 

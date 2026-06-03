@@ -373,6 +373,9 @@ namespace Celeris.Player
                 if (!_isStuckInCharge && generator != null &&
                     generator.GetTile(GridCoord + _direction) == null)
                 {
+                    Debug.Log($"[VELOCITY] Tile siguiente NO EXISTE: " +
+                              $"GridCoord={GridCoord} _direction={_direction} " +
+                              $"next={GridCoord + _direction}");
                     _rb.velocity = Vector3.zero;
                     return;
                 }
@@ -402,7 +405,6 @@ namespace Celeris.Player
         {
             Vector2Int current = WorldToCoord(transform.position);
             if (current == _lastProcessedCoord) return;
-            if (current == _previousCoord) { _rb.velocity = Vector3.zero; return; }
 
             var tile = generator.GetTile(current);
             if (tile == null)
@@ -419,6 +421,11 @@ namespace Celeris.Player
             _lastProcessedCoord = current;
             GridCoord           = current;
             OnTileEntered?.Invoke(tile);
+
+            Debug.Log($"[DETECT] Entró a tile {current} tipo={tile.tileType} " +
+                      $"arrowDir={tile.arrowDirection} " +
+                      $"_prev={_previousCoord} _last={_lastProcessedCoord} " +
+                      $"_dir={_direction}");
 
             ProcessTileEffect(tile);
 
@@ -710,13 +717,26 @@ namespace Celeris.Player
             var tile = generator.GetTile(GridCoord);
             if (tile == null || tile.tileType != TileType.ArrowTile) return;
 
-            // No permitir rotación si haría que la flecha apunte hacia atrás
-            var nextDir = (MoveDirection)(((int)tile.arrowDirection + 1) % 4);
+            var oldDir = tile.arrowDirection;
+            var nextDir = (MoveDirection)(((int)oldDir + 1) % 4);
             var nextVec = TileComponent.DirectionToVector(nextDir);
-            if (nextVec == -_direction) return;
 
+            // No permitir rotación que apunte al tile anterior
+            // (evita que el droid se devuelva al inicio).
+            // Usamos _previousCoord en vez de _direction porque
+            // _direction puede estar "envenenado" apuntando a
+            // un tile que no existe.
+            if (GridCoord + nextVec == _previousCoord)
+            {
+                Debug.Log($"[ROTATE] Bloqueado: {oldDir}→{nextDir} " +
+                          $"apunta a _previousCoord={_previousCoord}");
+                return;
+            }
+
+            Debug.Log($"[ROTATE] Rotando flecha en {GridCoord}: {oldDir}→{nextDir} " +
+                      $"_dir={_direction} _prevCoord={_previousCoord}");
             tile.RotateArrow90Degrees();
-            ApplyArrowDirection(tile);
+            ApplyArrowDirection(tile, fromPlayerRotation: true);
         }
 
         /// <summary>
@@ -729,14 +749,33 @@ namespace Celeris.Player
         ///   2. MoveRotation: sincroniza la rotación interna del Rigidbody con el transform.
         ///      Setear transform.forward directamente no actualiza rb.rotation, lo que
         ///      provoca que en el siguiente FixedUpdate la física use la rotación antigua.
+        ///
+        /// PARAM fromPlayerRotation:
+        ///   false (default) = llamado desde ProcessTileEffect al entrar a un tile.
+        ///     → El anti-loop con _previousCoord está activo.
+        ///   true = llamado desde TryRotateArrow por rotación del jugador.
+        ///     → El anti-loop se salta porque TryRotateArrow ya validó la dirección.
         /// </summary>
-        private void ApplyArrowDirection(TileComponent tile)
+        private void ApplyArrowDirection(TileComponent tile, bool fromPlayerRotation = false)
         {
             Vector2Int d    = TileComponent.DirectionToVector(tile.arrowDirection);
             Vector3    dir3 = new Vector3(d.x, 0f, d.y).normalized;
 
-            // Seguridad anti-loop: si la flecha apunta al tile anterior, ignorarla
-            if (GridCoord + d == _lastProcessedCoord) return;
+            // Seguridad anti-loop: solo para flechas del camino (no rotación manual)
+            if (!fromPlayerRotation)
+            {
+                if (GridCoord + d == _previousCoord)
+                {
+                    Debug.Log($"[ANTI-LOOP] Bloqueado: arrow en {GridCoord} apunta " +
+                              $"a {GridCoord + d} = _previousCoord={_previousCoord}. " +
+                              $"Se ignora la flecha, _direction={_direction}");
+                    return;
+                }
+            }
+
+            Debug.Log($"[ARROW] Aplicando dirección d={d} desde tile={tile.gridCoord} " +
+                      $"_prevCoord={_previousCoord} _direction_old={_direction} " +
+                      $"playerRotation={fromPlayerRotation}");
 
             // ── Axis-snap al centro del tile ──────────────────
             // Alinear el eje perpendicular a la nueva dirección para eliminar

@@ -33,12 +33,7 @@ public class LightPulse : MonoBehaviour
 
     public void Pulse()
     {
-        if (pointLight == null)
-        {
-            Debug.LogWarning("LightPulse: pointLight es null");
-            return;
-        }
-        Debug.Log($"LightPulse: intensidad = {pointLight.intensity}");
+        if (pointLight == null) return;
         pointLight.intensity = pulseIntensity;
         isPulsing = true;
     }
