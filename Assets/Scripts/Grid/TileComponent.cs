@@ -1,12 +1,3 @@
-// ============================================================
-// TileComponent.cs  |  Assets/Scripts/Grid/
-// Un componente por GameObject de tile.
-//
-// v4:
-//   • Solo 6 tipos de tile: Base, Arrow, Laser, Charge, Goal, Portal.
-//   • TypeColors indexado por (int)TileType directamente.
-//   • GetExitDirection: sin VoidTile; continúa recto por defecto.
-// ============================================================
 using Celeris.Data;
 using System.Collections;
 using UnityEngine;
@@ -15,7 +6,6 @@ namespace Celeris.Grid
 {
     public class TileComponent : MonoBehaviour
     {
-        // ── Datos ─────────────────────────────────────────────
         [Header("Tipo")]
         public TileType tileType = TileType.BaseTile;
 
@@ -23,37 +13,29 @@ namespace Celeris.Grid
         public MoveDirection arrowDirection = MoveDirection.North;
 
         [Header("Estado interactivo")]
-        /// <summary>
-        /// Para LaserTile: true = activo (peligroso).
-        /// Gestionado por LaserController en runtime.
-        /// </summary>
         public bool isActive = true;
+
+        [Header("Modelos especiales (asignados por TileModelRegistry)")]
+        public static GameObject ArrowPrefab;
+        public static GameObject LaserPrefab;
+        public static GameObject ChargePrefab;
+        public static GameObject GoalPrefab;
+
+        [Header("Portal — tile que activa el minijuego")]
+        [Tooltip("Color del tile portal (identificador visual del minijuego)")]
+        public Color portalColor = new Color(0.58f, 0.08f, 1.00f);
 
         [HideInInspector] public Vector2Int gridCoord;
 
-        // ── Renderer ─────────────────────────────────────────
         private Renderer _rend;
+        private GameObject _specialModel;
         private static readonly int EmissionColorID = Shader.PropertyToID("_EmissionColor");
 
-        // Colores placeholder indexados por (int)TileType
-        private static readonly Color[] TypeColors =
-        {
-            new Color(0.22f, 0.22f, 0.22f),   // 0 BaseTile   — gris oscuro
-            new Color(0.20f, 0.55f, 1.00f),   // 1 ArrowTile  — azul
-            new Color(1.00f, 0.38f, 0.00f),   // 2 LaserTile  — naranja
-            new Color(0.15f, 0.85f, 0.35f),   // 3 ChargeTile — verde
-            new Color(1.00f, 0.88f, 0.08f),   // 4 GoalTile   — amarillo
-            new Color(0.58f, 0.08f, 1.00f)    // 5 PortalTile — violeta
-        };
-
-        // ── Init ─────────────────────────────────────────────
         private void Awake()
         {
             _rend = GetComponentInChildren<Renderer>();
             Refresh();
         }
-
-        // ── Acciones públicas ─────────────────────────────────
 
         public void RotateArrow90Degrees()
         {
@@ -69,24 +51,81 @@ namespace Celeris.Grid
             Refresh();
         }
 
-        // ── Dirección de salida ───────────────────────────────
         public Vector2Int GetExitDirection(Vector2Int currentDir) =>
             tileType == TileType.ArrowTile
                 ? DirectionToVector(arrowDirection)
                 : currentDir;
 
-        // ── Visual ───────────────────────────────────────────
         public void Refresh()
         {
+            ApplyVisual();
+        }
+
+        private void ApplyVisual()
+        {
+            SpawnSpecialModel();
+            UpdateLasers();
+
             if (_rend == null) _rend = GetComponentInChildren<Renderer>();
             if (_rend == null) return;
 
-            int idx = Mathf.Clamp((int)tileType, 0, TypeColors.Length - 1);
-            Color c = TypeColors[idx];
+            if (tileType == TileType.PortalTile)
+                _rend.material.color = portalColor;
+        }
 
-            if (tileType == TileType.LaserTile && !isActive) c *= 0.30f;
+        private void UpdateLasers()
+        {
+            if (tileType != TileType.LaserTile || _specialModel == null) return;
 
-            _rend.material.color = c;
+            Transform lasersGroup = _specialModel.transform.Find("Lasers");
+            if (lasersGroup == null) return;
+
+            lasersGroup.gameObject.SetActive(isActive);
+        }
+
+        private void SpawnSpecialModel()
+        {
+            if (_specialModel != null)
+            {
+                Destroy(_specialModel);
+                _specialModel = null;
+            }
+
+            GameObject prefab = tileType switch
+            {
+                TileType.ArrowTile  => ArrowPrefab,
+                TileType.LaserTile  => LaserPrefab,
+                TileType.ChargeTile => ChargePrefab,
+                TileType.GoalTile   => GoalPrefab,
+                _                   => null
+            };
+
+            if (prefab == null) return;
+
+            _specialModel = Instantiate(prefab, transform);
+            _specialModel.transform.localPosition = Vector3.zero;
+
+            float angle = tileType switch
+            {
+                TileType.LaserTile or TileType.GoalTile => arrowDirection switch
+                {
+                    MoveDirection.North => 180f,
+                    MoveDirection.South => 0f,
+                    MoveDirection.East  => 270f,
+                    MoveDirection.West  => 90f,
+                    _                   => 0f
+                },
+                TileType.ArrowTile => arrowDirection switch
+                {
+                    MoveDirection.North => 0f,
+                    MoveDirection.East  => 90f,
+                    MoveDirection.South => 180f,
+                    MoveDirection.West  => 270f,
+                    _                   => 0f
+                },
+                _ => 0f
+            };
+            _specialModel.transform.localRotation = Quaternion.Euler(0f, angle, 0f);
         }
 
         public void PulseEmission(float duration = 0.3f)
