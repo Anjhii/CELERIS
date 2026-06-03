@@ -169,6 +169,14 @@ namespace Celeris.Player
         // Update() usa raw input para OnPressStart/End.
         private MobileInputHandler _mobileHandler;
 
+        // ── API de input para los estados ─────────────────────
+        /// <summary>
+        /// True si el jugador mantiene presionado en este frame.
+        /// Usado por NormalMovementState.Enter() para restaurar el
+        /// movimiento continuo al escapar de un ChargeTile.
+        /// </summary>
+        public bool IsInputHeld => GetInputHeld();
+
         // ─────────────────────────────────────────────────────
         private void Awake()
         {

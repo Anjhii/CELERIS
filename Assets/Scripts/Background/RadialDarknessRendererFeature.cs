@@ -25,6 +25,14 @@ public class RadialDarknessRendererFeature : ScriptableRendererFeature
         {
             if (material == null) return;
 
+            // Guard: evitar ejecutar en cámaras de overlay / SceneView / Preview
+            // que no tienen un color target con textura válida.
+            RTHandle cameraTarget = renderingData.cameraData.renderer.cameraColorTargetHandle;
+            if (cameraTarget == null || cameraTarget.rt == null) return;
+
+            // Guard: la textura temporal debe estar lista
+            if (tempTexture == null || tempTexture.rt == null) return;
+
             var stack = VolumeManager.instance.stack;
             var effect = stack.GetComponent<RadialDarknessEffect>();
             if (effect == null || !effect.IsActive()) return;
@@ -35,12 +43,10 @@ public class RadialDarknessRendererFeature : ScriptableRendererFeature
             material.SetColor("_Color", effect.color.value);
 
             CommandBuffer cmd = CommandBufferPool.Get("RadialDarkness");
-            RTHandle cameraTarget = renderingData.cameraData.renderer.cameraColorTargetHandle;
 
-            if (tempTexture == null || tempTexture.rt == null) return;
             Blitter.BlitCameraTexture(cmd, cameraTarget, tempTexture);
             Blitter.BlitCameraTexture(cmd, tempTexture, cameraTarget, material, 0);
-            
+
             context.ExecuteCommandBuffer(cmd);
             CommandBufferPool.Release(cmd);
         }
@@ -73,8 +79,15 @@ public class RadialDarknessRendererFeature : ScriptableRendererFeature
 
     public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
     {
-        if (pass != null)
-            renderer.EnqueuePass(pass);
+        if (pass == null) return;
+
+        // Solo encolar para cámaras de juego principales.
+        // Las cámaras de overlay, SceneView y Preview no tienen el color target
+        // con textura válida y causarían ArgumentNullException en cada frame.
+        var cameraType = renderingData.cameraData.cameraType;
+        if (cameraType != CameraType.Game && cameraType != CameraType.VR) return;
+
+        renderer.EnqueuePass(pass);
     }
 
     protected override void Dispose(bool disposing)
