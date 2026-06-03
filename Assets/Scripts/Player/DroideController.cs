@@ -136,6 +136,7 @@ namespace Celeris.Player
         // ── Privado — grid ────────────────────────────────────
         private Vector2Int _direction          = new(0, 1);
         private Vector2Int _lastProcessedCoord;
+        private Vector2Int _previousCoord;
 
         // ── Privado — ChargeTile ──────────────────────────────
         // Gestionado por FrictionMovementState vía SetIsStuckInCharge().
@@ -228,6 +229,7 @@ namespace Celeris.Player
 
             GridCoord           = WorldToCoord(generator.StartWorldPos);
             _lastProcessedCoord = GridCoord;
+            _previousCoord      = GridCoord - new Vector2Int(0, 1);
             _direction          = new Vector2Int(0, 1);
 
             Battery                  = batteryLimit;
@@ -400,6 +402,7 @@ namespace Celeris.Player
         {
             Vector2Int current = WorldToCoord(transform.position);
             if (current == _lastProcessedCoord) return;
+            if (current == _previousCoord) { _rb.velocity = Vector3.zero; return; }
 
             var tile = generator.GetTile(current);
             if (tile == null)
@@ -412,6 +415,7 @@ namespace Celeris.Player
                 return;
             }
 
+            _previousCoord      = _lastProcessedCoord;
             _lastProcessedCoord = current;
             GridCoord           = current;
             OnTileEntered?.Invoke(tile);
@@ -579,6 +583,7 @@ namespace Celeris.Player
             _rb.MoveRotation(targetRot);   // sync rotación interna del Rigidbody
 
             _lastProcessedCoord = coord;
+            _previousCoord      = coord - _direction;
             GridCoord           = coord;
 
             ExitPortal();
