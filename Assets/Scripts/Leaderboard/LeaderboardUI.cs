@@ -1,5 +1,6 @@
 using System.Collections;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro;  // Requiere TextMeshPro (está incluido en Unity 2019+)
 
@@ -49,7 +50,7 @@ public class LeaderboardUI : MonoBehaviour
             SupabaseManager.Instance.OnLeaderboardReceived += HandleLeaderboardData;
 
         btnRefresh?.onClick.AddListener(ShowLeaderboard);
-        btnClose?.onClick.AddListener(() => gameObject.SetActive(false));
+        btnClose?.onClick.AddListener(() => SceneManager.LoadScene("MainMenuScene"));
     }
 
     private void OnDisable()
@@ -64,6 +65,7 @@ public class LeaderboardUI : MonoBehaviour
     private void Start()
     {
         RefreshCurrentPlayerInfo();
+        ShowLeaderboard();
     }
 
     // ─── API pública ──────────────────────────────────────────────────────────
@@ -88,10 +90,11 @@ public class LeaderboardUI : MonoBehaviour
 
         bool receivedData = false;
 
+        // El evento OnLeaderboardReceived (suscrito en OnEnable) llama HandleLeaderboardData.
+        // El callback solo marca que llegaron datos para salir del while.
         SupabaseManager.Instance?.FetchLeaderboard(data =>
         {
             receivedData = true;
-            HandleLeaderboardData(data);
         }, topLimit);
 
         // Esperar hasta 10 segundos a que lleguen los datos
@@ -182,13 +185,13 @@ public class LeaderboardUI : MonoBehaviour
             if (p.username == myName)
             {
                 if (txtCurrentRank != null)
-                    txtCurrentRank.text = $"Tu posición: #{p.posicion}";
+                    txtCurrentRank.text = $"You: #{p.posicion}";
                 return;
             }
         }
-
+    
         if (txtCurrentRank != null)
-            txtCurrentRank.text = "Aún no estás en el Top";
+            txtCurrentRank.text = "You are not in the Top";
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
