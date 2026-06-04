@@ -67,12 +67,10 @@ public class ScoreManager : MonoBehaviour
     public long GetTotalCumulativeScore()
     {
         long total = 0;
-        for (int i = 0; ; i++)
-        {
-            string key = $"LevelBestScore_{i}";
-            if (!PlayerPrefs.HasKey(key)) break;
-            total += PlayerPrefs.GetInt(key, 0);
-        }
+        // Iterar hasta MaxUnlockedLevel en lugar de detenerse al primer índice sin clave,
+        // evita que niveles saltados o con score 0 corten la suma prematuramente.
+        for (int i = 0; i <= MaxUnlockedLevel; i++)
+            total += PlayerPrefs.GetInt($"LevelBestScore_{i}", 0);
         return total;
     }
 
@@ -117,7 +115,7 @@ public class ScoreManager : MonoBehaviour
         EvaluateHighScore(finalScore);
 
         if (SupabaseManager.Instance != null)
-            SupabaseManager.Instance.SubmitScore(LocalHighScore, Username, DeviceId);
+            SupabaseManager.Instance.SubmitScore(LocalHighScore, Username);  // GetUserId() usa Auth UUID si está logueado
         else
             MarkScoreAsPending(LocalHighScore);
     }
@@ -185,7 +183,7 @@ public class ScoreManager : MonoBehaviour
         // ── Sincronizar todo con Supabase ─────────────────────────────────────
         if (SupabaseManager.Instance != null)
         {
-            SupabaseManager.Instance.SubmitScore(LocalHighScore, Username, DeviceId);
+            SupabaseManager.Instance.SubmitScore(LocalHighScore, Username);  // GetUserId() usa Auth UUID si está logueado
             SupabaseManager.Instance.SyncPlayerProgress();
         }
         else

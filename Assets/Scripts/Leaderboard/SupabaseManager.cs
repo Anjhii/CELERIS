@@ -136,12 +136,22 @@ public class SupabaseManager : MonoBehaviour
 
     private void CheckAndSyncPendingScore()
     {
-        if (ScoreManager.Instance != null && ScoreManager.Instance.HasPendingSync)
-        {
-            long pending   = ScoreManager.Instance.PendingScore;
-            string uid     = ScoreManager.Instance.DeviceId;
-            string uname   = ScoreManager.Instance.Username;
+        if (ScoreManager.Instance == null) return;
 
+        long localBest = ScoreManager.Instance.LocalHighScore;
+        string uname   = ScoreManager.Instance.Username;
+        string uid     = GetUserId();   // Auth UUID si está logueado, DeviceId si no
+
+        // Siempre re-enviar el mejor score local al arrancar con DB lista.
+        // Supabase usa GREATEST, así que solo sube si es mayor al registrado.
+        if (localBest > 0)
+        {
+            Debug.Log($"[SupabaseManager] Sincronizando score local al arrancar: {localBest} pts.");
+            StartCoroutine(SubmitScoreRoutine(uid, uname, localBest));
+        }
+        else if (ScoreManager.Instance.HasPendingSync)
+        {
+            long pending = ScoreManager.Instance.PendingScore;
             Debug.Log($"[SupabaseManager] Puntaje offline pendiente detectado: {pending}. Sincronizando...");
             StartCoroutine(SubmitScoreRoutine(uid, uname, pending));
         }
@@ -268,6 +278,7 @@ public class SupabaseManager : MonoBehaviour
             if (req.result == UnityWebRequest.Result.Success)
             {
                 string raw     = req.downloadHandler.text;
+                Debug.Log($"[SupabaseManager] Raw response: {raw}");   // ← log temporal
                 string wrapped = "{\"players\":" + raw + "}";
 
                 LeaderboardWrapper data = JsonUtility.FromJson<LeaderboardWrapper>(wrapped);
