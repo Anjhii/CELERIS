@@ -1194,7 +1194,7 @@ MonoBehaviour:
   levelsContainer: {fileID: 591530773}
   levelButtonPrefab: {fileID: 2758525293950029239, guid: 6af20fc0f1e344346b285b4ebc6ca96c,
     type: 3}
-  progressText: {fileID: 193720370}
+  progressText: {fileID: 1179164056}
   backButton: {fileID: 1076743727}
   totalLevels: 10
 --- !u!4 &2006832217
