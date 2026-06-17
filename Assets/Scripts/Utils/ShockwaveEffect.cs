@@ -1,7 +1,7 @@
 using System.Collections;
 using UnityEngine;
 
-namespace Celeris.Core
+namespace Celeris.Utils
 {
     public class ShockwaveEffect : MonoBehaviour
     {
@@ -14,6 +14,7 @@ namespace Celeris.Core
         [SerializeField] private float startScale  = 0.1f;
 
         private GameObject _shockwavePlane;
+        private Material   _instanceMaterial;   // instancia propia — destruir en OnDestroy
         private static readonly int OpacityID = Shader.PropertyToID("_Opacity");
 
         private void Start()
@@ -26,14 +27,24 @@ namespace Celeris.Core
             _shockwavePlane.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
             _shockwavePlane.transform.localScale    = Vector3.one * startScale;
 
-            // Instanciar material para no afectar otras ondas
+            // Instanciar material para no afectar otras ondas.
+            // Guardamos referencia para destruirlo en OnDestroy (evita GPU leak).
             var renderer = _shockwavePlane.GetComponent<Renderer>();
-            renderer.material = new Material(shockwaveMaterial);
+            _instanceMaterial  = new Material(shockwaveMaterial);
+            renderer.material  = _instanceMaterial;
 
             // Quitar collider
             Destroy(_shockwavePlane.GetComponent<Collider>());
 
             _shockwavePlane.SetActive(false);
+        }
+
+        private void OnDestroy()
+        {
+            // Destruir la instancia de material para liberar memoria GPU.
+            // Unity no la destruye automáticamente al destruir el GameObject.
+            if (_instanceMaterial != null)
+                Destroy(_instanceMaterial);
         }
 
         public void Trigger()
@@ -47,7 +58,7 @@ namespace Celeris.Core
         {
             _shockwavePlane.SetActive(true);
 
-            var mat     = _shockwavePlane.GetComponent<Renderer>().material;
+            // Usar _instanceMaterial directamente — no llamar .material (crearía otra instancia).
             float elapsed = 0f;
 
             while (elapsed < duration)
@@ -61,7 +72,7 @@ namespace Celeris.Core
 
                 // Fade out
                 float opacity = Mathf.Lerp(1f, 0f, t);
-                mat.SetFloat(OpacityID, opacity);
+                _instanceMaterial.SetFloat(OpacityID, opacity);
 
                 yield return null;
             }

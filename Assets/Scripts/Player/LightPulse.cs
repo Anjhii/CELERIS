@@ -2,39 +2,44 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class LightPulse : MonoBehaviour
+namespace Celeris.Player
 {
-    public Light pointLight;
-    private float baseIntensity = 3f;
-    private float pulseIntensity = 6f;
-    private float pulseSpeed = 8f;
-    private bool isPulsing = false;
 
-    void Start()
+    public class LightPulse : MonoBehaviour
     {
-        if (pointLight == null)
-            pointLight = GetComponent<Light>();
-    }
+        public Light pointLight;
+        private float baseIntensity = 3f;
+        private float pulseIntensity = 6f;
+        private float pulseSpeed = 8f;
+        private bool isPulsing = false;
 
-    void Update()
-    {
-        if (isPulsing)
+        void Start()
         {
-            pointLight.intensity = Mathf.Lerp(
-                pointLight.intensity, 
-                baseIntensity, 
-                Time.deltaTime * pulseSpeed
-            );
+            if (pointLight == null)
+                pointLight = GetComponent<Light>();
+        }
 
-            if (Mathf.Abs(pointLight.intensity - baseIntensity) < 0.05f)
-                isPulsing = false;
+        void Update()
+        {
+            if (isPulsing)
+            {
+                pointLight.intensity = Mathf.Lerp(
+                    pointLight.intensity, 
+                    baseIntensity, 
+                    Time.deltaTime * pulseSpeed
+                );
+
+                if (Mathf.Abs(pointLight.intensity - baseIntensity) < 0.05f)
+                    isPulsing = false;
+            }
+        }
+
+        public void Pulse()
+        {
+            if (pointLight == null) return;
+            pointLight.intensity = pulseIntensity;
+            isPulsing = true;
         }
     }
 
-    public void Pulse()
-    {
-        if (pointLight == null) return;
-        pointLight.intensity = pulseIntensity;
-        isPulsing = true;
-    }
 }

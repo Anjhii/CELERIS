@@ -2,7 +2,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 
-namespace Celeris.Core
+namespace Celeris.Background
 {
     public class RadialDarknessController : MonoBehaviour
     {

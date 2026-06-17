@@ -31,8 +31,9 @@ namespace Celeris.Grid
         /// Envía la coordenada de grid del tile para comparación eficiente.
         /// DroideController suscribe para detectar láseres que se encienden
         /// mientras el droide está parado sobre ellos.
+        /// MIGRACIÓN Fase 2: Vector2Int → Vector3Int (Y siempre 0 hasta Fase 3/4).
         /// </summary>
-        public static event Action<Vector2Int> OnLaserActivated;
+        public static event Action<Vector3Int> OnLaserActivated;
 
         // ── Inspector / API de configuración ─────────────────
         [Header("Intervalos")]
@@ -61,6 +62,14 @@ namespace Celeris.Grid
             _tile.isActive = startActive;
             _tile.Refresh();
             StartCoroutine(CycleRoutine());
+        }
+
+        private void OnDisable()
+        {
+            // Detener CycleRoutine al desactivarse para evitar corrutinas zombie.
+            // Configure() ya llama StopAllCoroutines() antes de reiniciar,
+            // pero OnDisable cubre el path de destruccion de tile en mid-cycle.
+            StopAllCoroutines();
         }
 
         // ── Ciclo principal ───────────────────────────────────

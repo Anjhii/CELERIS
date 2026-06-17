@@ -2,13 +2,13 @@ using Celeris.Data;
 using Celeris.Player;
 using UnityEngine;
 
-namespace Celeris.Core
+namespace Celeris.Player
 {
     public class DroideLightController : MonoBehaviour
     {
         [Header("Referencias")]
-        [SerializeField] private Light pointLight;
-        [SerializeField] private DroideController droide;
+        [SerializeField] private Light     pointLight;
+        [SerializeField] private DroideCore droide;
 
         [Header("Intensidad por batería")]
         [SerializeField] private float maxIntensity = 3f;
@@ -56,8 +56,9 @@ namespace Celeris.Core
         private void Update()
         {
             if (pointLight == null) return;
+            // Guard: no actualizar luz post-muerte (evita Update corriendo zombie)
+            if (droide != null && droide.State == DroideState.Dead) return;
 
-            // Suavizar intensidad y color
             pointLight.intensity = Mathf.Lerp(
                 pointLight.intensity, _targetIntensity, Time.deltaTime * smoothSpeed);
             pointLight.color = Color.Lerp(
@@ -66,6 +67,9 @@ namespace Celeris.Core
 
         private void HandleBatteryChanged(int newBattery)
         {
+            // Guard: evita NullRef si droide fue destruido entre el subscribe y el
+            // callback, y evita actualizar la luz cuando ya esta en estado Dead.
+            if (!droide || droide.State == DroideState.Dead) return;
             UpdateTargets(newBattery, droide.State);
         }
 

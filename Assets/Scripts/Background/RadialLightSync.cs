@@ -2,7 +2,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using Celeris.Player;
 
-namespace Celeris.Core
+namespace Celeris.Background
 {
     public class RadialLightSync : MonoBehaviour
     {

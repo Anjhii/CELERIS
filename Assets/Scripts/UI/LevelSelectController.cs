@@ -23,6 +23,7 @@
 //     Adjuntar LevelButtonUI.cs al Button raíz.
 // ============================================================
 using Celeris.Core;
+using Celeris.Leaderboard;
 using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -76,21 +77,25 @@ namespace Celeris.UI
 
             for (int i = 1; i <= totalLevels; i++)
             {
+                // Captura explicita de i para evitar closure-capture-by-reference.
+                // Sin esto, todos los lambdas capturarian el valor final de i (totalLevels+1).
+                int captured = i;
+
                 var go   = Instantiate(levelButtonPrefab, levelsContainer);
                 var btn  = go.GetComponent<LevelButtonUI>();
                 if (btn == null) btn = go.AddComponent<LevelButtonUI>();
 
-                int  stars     = GetStarsForLevel(i);
-                int  bestScore = GetBestScoreForLevel(i);
-                bool locked    = (i > maxUnlocked);
-                bool current   = (i == LevelManager.CurrentLevelNumber);
+                int  stars     = GetStarsForLevel(captured);
+                int  bestScore = GetBestScoreForLevel(captured);
+                bool locked    = (captured > maxUnlocked);
+                bool current   = (captured == LevelManager.CurrentLevelNumber);
 
                 btn.Setup(
-                    levelNumber : i,
+                    levelNumber : captured,
                     stars       : stars,
                     isLocked    : locked,
                     isCurrent   : current,
-                    onClick     : () => OnLevelSelected(i),  // captura correcta con variable local
+                    onClick     : () => OnLevelSelected(captured),
                     bestScore   : bestScore
                 );
             }
@@ -100,12 +105,12 @@ namespace Celeris.UI
         {
             if (progressText == null) return;
 
-            int completed  = PlayerPrefs.GetInt("LevelsCompleted", 0);
-            int total      = totalLevels;
-            int totalStars = PlayerPrefs.GetInt("TotalStars", 0);
+            var sm = ScoreManager.Instance;
+            int completed  = sm != null ? sm.LevelsCompleted : 0;
+            int totalStars = sm != null ? sm.TotalStars      : 0;
 
             progressText.text =
-                $"Completados: {Mathf.Min(completed, total)} / {total}   " +
+                $"Completados: {Mathf.Min(completed, totalLevels)} / {totalLevels}   " +
                 $"★ {totalStars}";
         }
 
@@ -121,16 +126,23 @@ namespace Celeris.UI
         }
 
         // ── Helpers de progreso ───────────────────────────────
-        // Leen directamente de PlayerPrefs con las mismas claves que ScoreManager
-        private static int GetStarsForLevel(int levelNumber) =>
-            PlayerPrefs.GetInt($"LevelStars_{levelNumber}", 0);
+        // Delegan en ScoreManager (que usa IPlayerProgressStore internamente).
+        // Eliminados los accesos directos a PlayerPrefs de este archivo.
 
-        // Nota: LevelButtonUI usa índice 0-based para LevelBestScore pero
-        // LevelSelectController itera levelNumber (1-based). El índice es levelNumber-1.
+        private static int GetStarsForLevel(int levelNumber) =>
+            ScoreManager.Instance != null
+                ? ScoreManager.Instance.GetStarsForLevel(levelNumber)
+                : 0;
+
+        // LevelBestScore usa indice 0-based; levelNumber es 1-based.
         private static int GetBestScoreForLevel(int levelNumber) =>
-            PlayerPrefs.GetInt($"LevelBestScore_{levelNumber - 1}", 0);
+            ScoreManager.Instance != null
+                ? ScoreManager.Instance.GetBestScoreForLevel(levelNumber - 1)
+                : 0;
 
         private static int PlayerPrefsMaxUnlocked() =>
-            PlayerPrefs.GetInt("MaxUnlockedLevel", 0);
+            ScoreManager.Instance != null
+                ? ScoreManager.Instance.MaxUnlockedLevel
+                : 0;
     }
 }

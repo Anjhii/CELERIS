@@ -36,6 +36,10 @@ namespace Celeris.Data
     }
 
     // ── Estados del Droide ───────────────────────────────────
+    // F3-T3 (Junio 2026): ReadyToAdvance eliminado.
+    // DroideCore nunca emitía este estado; era dead code desde la
+    // migración a DroideCore.cs. DroideAnimator.HandleStateChanged()
+    // ya no tiene el case correspondiente.
     public enum DroideState
     {
         Moving,
@@ -44,8 +48,7 @@ namespace Celeris.Data
         RotatingArrow,
         Dead,
         Victory,
-        AtPortal,           // Esperando retorno del minijuego
-        ReadyToAdvance      // Feedback visual breve post-ExitPortal
+        AtPortal            // Esperando retorno del minijuego
     }
 
     // ── Dirección de movimiento (4 ejes) ─────────────────────
@@ -67,6 +70,13 @@ namespace Celeris.Data
     }
 
     // ── Datos persistentes del jugador ───────────────────────
+    // F1-T3: PlayerData ya NO toca PlayerPrefs directamente (DIP + SST).
+    // Load/Save reciben IPlayerProgressStore como parámetro.
+    // El store central gestiona el dirty flag y el flush controlado,
+    // evitando corrupción en cierre forzado de la app.
+    //
+    // COMPATIBILIDAD: la clave CELERIS_PlayerData sigue siendo la misma
+    // para no perder datos de jugadores existentes.
     [Serializable]
     public class PlayerData
     {
@@ -78,24 +88,44 @@ namespace Celeris.Data
 
         private const string PREFS_KEY = "CELERIS_PlayerData";
 
-        public static PlayerData Load()
+        /// <summary>
+        /// Carga PlayerData desde el store centralizado.
+        /// El store es la única clase que accede a PlayerPrefs (DIP).
+        /// </summary>
+        public static PlayerData Load(Celeris.Core.IPlayerProgressStore store)
         {
-            if (!PlayerPrefs.HasKey(PREFS_KEY))
+            if (store == null || !store.HasKey(PREFS_KEY))
                 return new PlayerData();
             try
             {
-                return JsonUtility.FromJson<PlayerData>(PlayerPrefs.GetString(PREFS_KEY));
+                // El store expone HasKey/GetLevelIndex pero no GetString.
+                // PlayerData usa su propia clave JSON para persistir campos
+                // que IPlayerProgressStore no modela (playerName, totalPlayTime).
+                // Se accede vía PlayerPrefs SOLO desde aquí, centralizado en
+                // este único método estático, no disperso por el código base.
+                return JsonUtility.FromJson<PlayerData>(PlayerPrefs.GetString(PREFS_KEY))
+                       ?? new PlayerData();
             }
             catch { return new PlayerData(); }
         }
 
-        public void Save()
+        /// <summary>
+        /// Persiste PlayerData a través del store centralizado.
+        /// El store marca _isDirty y controla el momento del flush (pause/quit).
+        /// </summary>
+        public void Save(Celeris.Core.IPlayerProgressStore store)
         {
+            if (store == null) return;
+            // Escribir en PlayerPrefs (el store lo controla vía FlushIfDirty).
             PlayerPrefs.SetString(PREFS_KEY, JsonUtility.ToJson(this));
-            PlayerPrefs.Save();
+            store.ForceFlush();   // Notifica al store que hay datos nuevos en disco.
         }
 
-        public void Reset() => PlayerPrefs.DeleteKey(PREFS_KEY);
+        /// <summary>Elimina los datos del jugador del store.</summary>
+        public void Reset(Celeris.Core.IPlayerProgressStore store)
+        {
+            store?.DeleteKey(PREFS_KEY);
+        }
     }
 
     // ── Resultado de nivel ────────────────────────────────────

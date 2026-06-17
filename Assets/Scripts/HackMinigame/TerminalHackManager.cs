@@ -1,284 +1,242 @@
 // ============================================================
-// TerminalHackManager.cs  |  Assets/Scripts/HackMinigame/
+// TerminalHackManager.cs  |  Assets/Scripts/HackMinigame/  — v5 SOLID
 //
-// v3 — Doble UnloadScene corregido.
+// RESPONSABILIDAD ÚNICA (SRP):
+//   Orquestar el flujo del minijuego de hackeo. No genera secuencias
+//   ni valida inputs directamente — delega en sub-componentes.
 //
-// CAMBIOS v3:
+// LO QUE NO HACE:
+//   No reproduce glifos          → HackSequenceController
+//   No compara clicks del jugador → HackInputValidator
+//   No carga/descarga escenas     → GameFlowManager (escucha OnTerminalExited)
+//   No restaura el Droide         → DroidRestoreService
 //
-//   ExitScene() (éxito) ya NO llama SceneManager.UnloadSceneAsync().
-//   Solo dispara OnTerminalExited. GameFlowManager suscribe a ese
-//   evento y es el ÚNICO responsable de descargar la escena del
-//   minijuego y llamar droide.RestoreFromPortal(). Esto elimina
-//   el bug donde la escena se intentaba descargar dos veces.
+// CAMBIO v5 respecto a v4:
+//   • HackedTerminalsCount (static) eliminado.
+//     Reemplazado por GameStateManager.Instance.TerminalsHackedThisRun.
+//   • ResetHackedCount() eliminado.
+//     Reemplazado por GameStateManager.Instance.ResetTerminalsHacked().
+//   • Lógica de secuencia extraída a HackSequenceController.
+//   • Lógica de validación extraída a HackInputValidator.
+//   • TerminalHackManager solo orquesta: Init → Play → WaitResult → Decide.
 //
-//   TriggerGameOver() sigue cargando la escena de game over
-//   directamente (es un flujo distinto al portal).
+// FLUJO:
+//   OnEnable  → sessionData.RuntimeReset()
+//   Start     → BeginAttempt()
+//               → sequenceController.Init() + StartCoroutine(Play())
+//               → sequenceController.OnSequenceComplete → inputValidator.Enable()
+//               → inputValidator.OnAttemptResult(success)
+//                   success=true  → ResolutionRoutine(true)  → ExitScene()
+//                   success=false → ResolutionRoutine(false)
+//                     intentos restantes → BeginAttempt()
+//                     sin intentos       → TriggerGameOver()
 //
-//   OnDisable() limpia todos los delegados de glifos.
-//   HackedTerminalsCount / RequiredHacks / ResetHackedCount()
-//   siguen siendo la fuente de verdad para la validación de la meta.
+// MODO TEST AISLADO (sceneCount == 1):
+//   ExitScene y TriggerGameOver recargan la misma escena para permitir
+//   iterar el minijuego sin depender de GameFlowManager.
 // ============================================================
 using System.Collections;
 using System.Collections.Generic;
+using Celeris.Core;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-public class TerminalHackManager : MonoBehaviour
+namespace Celeris.HackMinigame
 {
-    public enum HackState { MostrandoSecuencia, EsperandoJugador, Bloqueado }
-
-    // ── Eventos globales ──────────────────────────────────────────────────────
-    /// <summary>
-    /// Disparado cuando el hack termina con ÉXITO y la escena está lista para cerrarse.
-    /// GameFlowManager suscribe a esto para descargar MiniGameScene y restaurar el Droide.
-    /// NO se dispara en game-over.
-    /// </summary>
-    public static event System.Action OnTerminalExited;
-
-    /// <summary>
-    /// Disparado cuando el jugador agota los 3 intentos del hackeo.
-    /// GameFlowManager suscribe para descargar MiniGameScene y mostrar el panel de Game Over.
-    /// </summary>
-    public static event System.Action OnHackGameOver;
-
-    // ── Contador de terminales ────────────────────────────────────────────────
-    /// <summary>Terminales completadas con éxito en la run actual.</summary>
-    public static int HackedTerminalsCount { get; private set; } = 0;
-
-    /// <summary>Terminales requeridas para desbloquear la meta.</summary>
-    public const int RequiredHacks = 3;
-
-    /// <summary>Llamado por DroideController.Init() al comenzar un nivel nuevo.</summary>
-    public static void ResetHackedCount() => HackedTerminalsCount = 0;
-
-    // ── Inspector ─────────────────────────────────────────────────────────────
-    [Header("Puente de Datos (SOLID)")]
-    [SerializeField] private HackSessionData sessionData;
-
-    [Header("Componentes de la Interfaz")]
-    [SerializeField] private List<AlienGlyph> glyphs;
-    [SerializeField] private AudioSource centralAudioSource;
-
-    // ── Estado interno ─────────────────────────────────────────────────────────
-    private List<int> currentSequence  = new List<int>();
-    private int       playerInputIndex = 0;
-    private HackState currentState     = HackState.Bloqueado;
-
-    private int   sequenceLength;
-    private float displaySpeed;
-
-    // ─────────────────────────────────────────────────────────────────────────
-    private void Start()
+    public class TerminalHackManager : MonoBehaviour
     {
-        InitializeTerminalHack();
-    }
+        // ── Eventos globales ──────────────────────────────────
+        /// <summary>
+        /// Hack completado con éxito. GameFlowManager descarga la escena y restaura el Droide.
+        /// </summary>
+        public static event System.Action OnTerminalExited;
 
-    /// <summary>
-    /// Limpia todos los delegados al desactivarse para evitar fugas de memoria.
-    /// Cubre tanto el cierre de escena como cualquier destrucción en play mode.
-    /// </summary>
-    private void OnDisable()
-    {
-        if (glyphs == null) return;
-        foreach (AlienGlyph glyph in glyphs)
+        /// <summary>
+        /// Jugador agotó los 3 intentos. GameFlowManager descarga la escena y llama ForceKill.
+        /// </summary>
+        public static event System.Action OnHackGameOver;
+
+        // ── Inspector ─────────────────────────────────────────
+        [Header("Datos de sesión")]
+        [SerializeField] private HackSessionData sessionData;
+
+        [Header("Glifos y Audio")]
+        [SerializeField] private List<AlienGlyph> glyphs;
+        [SerializeField] private AudioSource       centralAudioSource;
+
+        // ── Sub-componentes (SRP, DIP) ────────────────────────
+        private HackSequenceController _sequenceController;
+        private HackInputValidator     _inputValidator;
+
+        // ── Lifecycle ─────────────────────────────────────────
+
+        private void OnEnable()
         {
-            if (glyph != null)
-                glyph.OnGlyphClicked -= OnGlyphSelectedByPlayer;
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    private void InitializeTerminalHack()
-    {
-        if (sessionData.currentAttempt > 3)
-        {
-            TriggerGameOver();
-            return;
+            // RuntimeReset garantiza que currentAttempt=1 aunque el ScriptableObject
+            // haya persistido estado en el Editor entre sesiones de Play Mode.
+            if (sessionData != null)
+                sessionData.RuntimeReset();
         }
 
-        sequenceLength = sessionData.GetProceduralSequenceLength();
-        displaySpeed   = sessionData.GetProceduralDisplaySpeed();
-
-        for (int i = 0; i < glyphs.Count; i++)
+        private void Start()
         {
-            glyphs[i].Initialize(i);
-            glyphs[i].OnGlyphClicked -= OnGlyphSelectedByPlayer;
-            glyphs[i].OnGlyphClicked += OnGlyphSelectedByPlayer;
+            _sequenceController = new HackSequenceController();
+            _inputValidator     = new HackInputValidator();
+
+            // Conectar el resultado del validador al orquestador
+            _inputValidator.OnAttemptResult += HandleAttemptResult;
+
+            SetGlyphsInteractable(false);
+            BeginAttempt();
         }
 
-        GenerateNonRepeatingSequence();
-        StartCoroutine(PlaySequenceCoroutine());
-    }
-
-    private void GenerateNonRepeatingSequence()
-    {
-        currentSequence.Clear();
-        int lastIndex = -1;
-        for (int i = 0; i < sequenceLength; i++)
+        private void OnDisable()
         {
-            int nextIndex;
-            do { nextIndex = Random.Range(0, glyphs.Count); }
-            while (nextIndex == lastIndex);
-            currentSequence.Add(nextIndex);
-            lastIndex = nextIndex;
-        }
-    }
-
-    private IEnumerator PlaySequenceCoroutine()
-    {
-        currentState = HackState.MostrandoSecuencia;
-        SetGridInteractable(false);
-        yield return new WaitForSeconds(0.5f);
-
-        foreach (int index in currentSequence)
-        {
-            AlienGlyph glyph = glyphs[index];
-            glyph.ActivateGlow();
-            if (glyph.GetSound() != null && centralAudioSource != null)
-                centralAudioSource.PlayOneShot(glyph.GetSound());
-            yield return new WaitForSeconds(displaySpeed);
-            glyph.DeactivateGlow();
-            yield return new WaitForSeconds(0.15f);
+            if (_inputValidator != null)
+            {
+                _inputValidator.OnAttemptResult -= HandleAttemptResult;
+                _inputValidator.Cleanup();
+            }
         }
 
-        currentState     = HackState.EsperandoJugador;
-        playerInputIndex = 0;
-        SetGridInteractable(true);
-    }
+        // ── Flujo principal ───────────────────────────────────
 
-    private void OnGlyphSelectedByPlayer(int glyphIndex)
-    {
-        if (currentState != HackState.EsperandoJugador) return;
-        StartCoroutine(FlashPlayerChoice(glyphIndex));
-
-        if (glyphIndex == currentSequence[playerInputIndex])
+        private void BeginAttempt()
         {
-            playerInputIndex++;
-            if (playerInputIndex >= currentSequence.Count)
-                HandleResolution(true);
-        }
-        else
-        {
-            HandleResolution(false);
-        }
-    }
-
-    private IEnumerator FlashPlayerChoice(int index)
-    {
-        glyphs[index].ActivateGlow();
-        if (glyphs[index].GetSound() != null && centralAudioSource != null)
-            centralAudioSource.PlayOneShot(glyphs[index].GetSound());
-        yield return new WaitForSeconds(0.18f);
-        glyphs[index].DeactivateGlow();
-    }
-
-    private void HandleResolution(bool success)
-    {
-        currentState = HackState.Bloqueado;
-        SetGridInteractable(false);
-        StartCoroutine(ResolutionRoutine(success));
-    }
-
-    private IEnumerator ResolutionRoutine(bool success)
-    {
-        yield return new WaitForSeconds(0.9f);
-
-        if (success)
-        {
-            sessionData.wasHackSuccessful = true;
-            sessionData.extractedDigit    = Random.Range(0, 10);
-            HackedTerminalsCount++;
-
-            int reward = sessionData.CalculateScoreReward();
-            Debug.Log($"<color=green>[HACK EXITOSO]</color> Terminal {HackedTerminalsCount}/{RequiredHacks}. " +
-                      $"Recompensa: {reward} pts.");
-
-            // Acumular puntos en el ScoreManager para este nivel.
-            // Los 3 portales suman: 100+100+100 (primer intento) hasta 25+25+25.
-            if (ScoreManager.Instance != null)
-                ScoreManager.Instance.AddPoints(reward);
-            else
-                Debug.LogWarning("[TerminalHackManager] ScoreManager no encontrado — puntos no registrados.");
-
-            ExitScene();
-        }
-        else
-        {
-            sessionData.wasHackSuccessful = false;
-            sessionData.RegisterFailedAttempt();
-
-            if (sessionData.isGameOverDueToFailure)
+            // Guard: si ya agotamos intentos antes de llamar Init, ir a game over
+            if (sessionData.currentAttempt > 3)
             {
                 TriggerGameOver();
+                return;
+            }
+
+            SetGlyphsInteractable(false);
+            InitializeGlyphs();
+
+            _sequenceController.Init(glyphs, sessionData, centralAudioSource);
+
+            // Suscribir OnSequenceComplete justo antes de reproducir para
+            // evitar doble-suscripción si BeginAttempt se llama múltiples veces.
+            _sequenceController.OnSequenceComplete -= OnSequenceReady;
+            _sequenceController.OnSequenceComplete += OnSequenceReady;
+
+            StartCoroutine(_sequenceController.Play());
+        }
+
+        private void OnSequenceReady()
+        {
+            _sequenceController.OnSequenceComplete -= OnSequenceReady;
+
+            _inputValidator.Init(
+                glyphs,
+                _sequenceController.CurrentSequence,
+                centralAudioSource,
+                this);
+
+            SetGlyphsInteractable(true);
+            _inputValidator.Enable();
+        }
+
+        private void HandleAttemptResult(bool success)
+        {
+            SetGlyphsInteractable(false);
+            StartCoroutine(ResolutionRoutine(success));
+        }
+
+        private IEnumerator ResolutionRoutine(bool success)
+        {
+            yield return new WaitForSeconds(0.9f);
+
+            if (success)
+            {
+                sessionData.wasHackSuccessful = true;
+                sessionData.extractedDigit    = UnityEngine.Random.Range(0, 10);
+
+                // Incrementar contador en GameStateManager (reemplaza static HackedTerminalsCount)
+                var gsm = GameStateManager.Instance;
+                if (gsm != null) gsm.IncrementTerminalsHacked();
+
+                int reward = sessionData.CalculateScoreReward();
+                Debug.Log($"<color=green>[HACK EXITOSO]</color> " +
+                          $"Terminal {gsm?.TerminalsHackedThisRun}/3. " +
+                          $"Recompensa: {reward} pts.");
+
+                if (ScoreManager.Instance != null)
+                    ScoreManager.Instance.AddPoints(reward);
+                else
+                    Debug.LogWarning("[TerminalHackManager] ScoreManager no encontrado — puntos no registrados.");
+
+                ExitScene();
             }
             else
             {
-                Debug.Log($"<color=yellow>[INTRUSIÓN]</color> Intento {sessionData.currentAttempt} iniciado.");
-                InitializeTerminalHack();
+                sessionData.wasHackSuccessful = false;
+                sessionData.RegisterFailedAttempt();
+
+                if (sessionData.isGameOverDueToFailure)
+                {
+                    TriggerGameOver();
+                }
+                else
+                {
+                    Debug.Log($"<color=yellow>[INTRUSIÓN]</color> Intento {sessionData.currentAttempt} iniciado.");
+                    BeginAttempt();
+                }
             }
         }
-    }
 
-    private void SetGridInteractable(bool state)
-    {
-        foreach (AlienGlyph glyph in glyphs)
-            glyph.SetInteractable(state);
-    }
+        // ── Salida ────────────────────────────────────────────
 
-    // ── Salida por éxito ──────────────────────────────────────────────────────
-    private void ExitScene()
-    {
-        // Limpiar delegados (OnDisable también lo hace, pero por seguridad)
-        foreach (AlienGlyph glyph in glyphs)
-            glyph.OnGlyphClicked -= OnGlyphSelectedByPlayer;
-
-        // MODO TEST AISLADO (solo esta escena cargada)
-        if (SceneManager.sceneCount == 1)
+        private void ExitScene()
         {
-            Debug.Log("<color=cyan>[MODO PRUEBA]</color> Hackeo completado. Reiniciando para re-test...");
-            sessionData.ResetForNewTerminal();
-            // Notificar de todas formas por coherencia de listeners
+            // MODO TEST AISLADO
+            if (SceneManager.sceneCount == 1)
+            {
+                Debug.Log("<color=cyan>[MODO PRUEBA]</color> Hack completado. Reiniciando escena...");
+                sessionData.ResetForNewTerminal();
+                OnTerminalExited?.Invoke();
+                SceneManager.LoadScene(gameObject.scene.name);
+                return;
+            }
+
+            // MODO JUEGO: ceder el control a GameFlowManager vía evento.
+            Time.timeScale = 1f;
             OnTerminalExited?.Invoke();
-            SceneManager.LoadScene(gameObject.scene.name);
-            return;
         }
 
-        // MODO JUEGO REAL: disparar evento y ceder el control a GameFlowManager.
-        // GameFlowManager.OnTerminalHackExited() recibe esto y llama OnPortalComplete(),
-        // que descarga la escena aditiva y llama droide.RestoreFromPortal().
-        // TerminalHackManager NO llama SceneManager.UnloadSceneAsync() aquí.
-        Time.timeScale = 1f;
-        OnTerminalExited?.Invoke();
-    }
-
-    // ── Game Over ─────────────────────────────────────────────────────────────
-    private void TriggerGameOver()
-    {
-        Debug.Log("<color=red>[GAME OVER]</color> El robot falló los 3 intentos.");
-
-        foreach (AlienGlyph glyph in glyphs)
-            glyph.OnGlyphClicked -= OnGlyphSelectedByPlayer;
-
-        // MODO TEST AISLADO
-        if (SceneManager.sceneCount == 1)
+        private void TriggerGameOver()
         {
-            Debug.Log("<color=cyan>[MODO PRUEBA]</color> Reiniciando datos y escena...");
+            Debug.Log("<color=red>[GAME OVER]</color> El robot falló los 3 intentos.");
+
+            // MODO TEST AISLADO
+            if (SceneManager.sceneCount == 1)
+            {
+                Debug.Log("<color=cyan>[MODO PRUEBA]</color> Reiniciando datos y escena...");
+                sessionData.ResetForNewTerminal();
+                SceneManager.LoadScene(gameObject.scene.name);
+                return;
+            }
+
+            // Resetear sesión ANTES de notificar: si el jugador reintenta el nivel,
+            // la próxima vez que entre a un portal la sesión estará limpia.
             sessionData.ResetForNewTerminal();
-            SceneManager.LoadScene(gameObject.scene.name);
-            return;
+
+            Time.timeScale = 1f;
+            OnHackGameOver?.Invoke();
         }
 
-        // MODO JUEGO REAL: notificar a GameFlowManager para que descargue MiniGameScene
-        // y muestre el panel de Game Over en-juego. NO usar SceneManager.LoadScene aquí
-        // (causaría congelamiento si la escena de destino no existe).
-        Time.timeScale = 1f;
+        // ── Helpers ───────────────────────────────────────────
 
-        // Resetear sesión ANTES de notificar: la próxima vez que el jugador
-        // entre a un portal (tras reintentar el nivel), la sesión estará limpia.
-        // Sin esto, InitializeTerminalHack() ve currentAttempt > 3 y dispara
-        // game over inmediatamente en el siguiente intento.
-        sessionData.ResetForNewTerminal();
+        private void InitializeGlyphs()
+        {
+            for (int i = 0; i < glyphs.Count; i++)
+                glyphs[i].Initialize(i);
+        }
 
-        OnHackGameOver?.Invoke();
+        private void SetGlyphsInteractable(bool state)
+        {
+            foreach (AlienGlyph g in glyphs)
+                g.SetInteractable(state);
+        }
     }
 }

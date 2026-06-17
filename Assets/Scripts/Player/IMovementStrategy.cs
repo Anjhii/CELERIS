@@ -1,40 +1,47 @@
 // ============================================================
 // IMovementStrategy.cs  |  Assets/Scripts/Player/
 //
-// Contrato de estrategia de movimiento del Droide.
-// La implementación activa es TapMovementStrategy (movimiento
-// por Tap con velocidad proporcional a la frecuencia de taps).
+// ⚠ ARCHIVO ARCHIVADO — Fase 0, Acción 0.3
 //
-// Para añadir nuevas estrategias (ej. auto-run, ralentización):
-//   1. Implementar IMovementStrategy.
-//   2. Asignarla en DroideController.SetMovementStrategy().
+// ESTADO: INACTIVO. No compilar ni referenciar.
+//
+// MOTIVO DEL RETIRO:
+//   Esta interfaz y su única implementación (TapMovementStrategy)
+//   quedaron desconectadas del sistema activo cuando DroideController
+//   migró al patrón de estado via IPlayerState. Ninguna clase del
+//   proyecto referencia IMovementStrategy en tiempo de compilación.
+//   Su presencia generaba confusión sobre cuál es el contrato real
+//   del sistema de movimiento.
+//
+// CONTRATO ACTIVO:
+//   El sistema de movimiento se gobierna por IPlayerState.
+//   Ver: Assets/Scripts/Player/IPlayerState.cs
+//   Implementaciones activas:
+//     - NormalMovementState.cs  (movimiento continuo por hold)
+//     - FrictionMovementState.cs (atrapado en ChargeTile)
+//
+// EXTENSIBILIDAD FUTURA:
+//   Para añadir nuevas estrategias de movimiento (ej. auto-run,
+//   ralentización por dificultad) implementar IPlayerState,
+//   NO resucitar IMovementStrategy.
+//
+// HISTORIA:
+//   Creado para un sistema de tap con cola de movimientos.
+//   Reemplazado por IPlayerState + hold-to-move en v6 del controlador.
+//   Archivado en Fase 0 del roadmap de refactorización.
 // ============================================================
 
+// Código original conservado como referencia histórica:
+/*
 namespace Celeris.Player
 {
     public interface IMovementStrategy
     {
-        /// <summary>
-        /// Registra una intención de movimiento (generada por un tap del jugador).
-        /// La estrategia decide si ejecutar inmediatamente o encolar.
-        /// </summary>
         void RequestMove();
-
-        /// <summary>
-        /// Consume el movimiento pendiente. Llamar justo antes de ejecutar el paso.
-        /// </summary>
         void ConsumeMove();
-
-        /// <summary>True si hay al menos un movimiento pendiente de ejecutar.</summary>
         bool HasPendingMove { get; }
-
-        /// <summary>
-        /// Duración en segundos del próximo movimiento.
-        /// Inversamente proporcional a la frecuencia de taps recientes.
-        /// </summary>
         float GetMoveDuration();
-
-        /// <summary>Reinicia el estado interno (al morir, iniciar nivel, etc.).</summary>
         void Reset();
     }
 }
+*/
