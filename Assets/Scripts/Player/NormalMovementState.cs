@@ -18,37 +18,30 @@ namespace Celeris.Player
 {
     public class NormalMovementState : IPlayerState
     {
-        public void Enter(DroideController ctx)
+        public void Enter(IDroideContext ctx)
         {
-            // Restaurar duración de paso normal
-            ctx.SetMoveDurationOverride(-1f);   // -1 = usar valor base
-
-            // BUG FIX: restaurar movimiento si el jugador sigue presionando.
-            // Sin esto, FrictionMovementState.Exit() deja _shouldMove=false
-            // y el droide se detiene aunque el jugador no haya soltado.
+            ctx.SetMoveDurationOverride(-1f);
             ctx.SetShouldMove(ctx.IsInputHeld);
         }
 
-        public void Exit(DroideController ctx)
+        public void Exit(IDroideContext ctx)
         {
-            // Garantizar que el movimiento continuo se detiene al salir
             ctx.SetShouldMove(false);
         }
 
-        public void OnPressStart(DroideController ctx)
+        public void OnPressStart(IDroideContext ctx)
         {
             ctx.SetShouldMove(true);
         }
 
-        public void OnPressEnd(DroideController ctx)
+        public void OnPressEnd(IDroideContext ctx)
         {
             ctx.SetShouldMove(false);
         }
 
-        public void Tick(DroideController ctx)
+        public void Tick(IDroideContext ctx)
         {
-            // Sin lógica adicional por frame en movimiento normal.
-            // El MovementLoop de DroideController gestiona los pasos.
+            // Sin lógica adicional por frame.
         }
     }
 }

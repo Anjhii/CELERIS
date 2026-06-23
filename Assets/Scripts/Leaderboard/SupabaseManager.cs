@@ -4,410 +4,417 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.Networking;
 
-// ─── Estructuras de datos ────────────────────────────────────────────────────
-[Serializable]
-public class PlayerScore
+namespace Celeris.Leaderboard
 {
-    public int    posicion;
-    public string username;
-    public long   high_score;
-}
 
-[Serializable]
-public class LeaderboardWrapper
-{
-    public PlayerScore[] players;
-}
-
-/// <summary>
-/// SupabaseManager — Capa de red. Maneja toda la comunicación con Supabase.
-/// Cubre:
-///   A) Wake-up al arrancar (evita cold-start lento).
-///   B) UPSERT de puntaje vía RPC (solo guarda si es récord más alto).
-///   C) Cola offline: reintenta al detectar conexión.
-///   D) Obtención del ranking Top-N.
-/// </summary>
-public class SupabaseManager : MonoBehaviour
-{
-    // ─── Singleton ───────────────────────────────────────────────────────────
-    public static SupabaseManager Instance { get; private set; }
-
-    // ─── Configuración (llenar en el Inspector) ───────────────────────────────
-    [Header("Supabase Config")]
-    [SerializeField] private string supabaseUrl    = "https://TU_PROYECTO.supabase.co";
-    [SerializeField] private string supabaseAnonKey = "TU_ANON_KEY";
-
-    [Header("Comportamiento")]
-    [SerializeField] private int  topRankingsCount = 10;       // Cuántos puestos traer
-    [SerializeField] private float retryInterval   = 30f;      // Segundos entre reintentos offline
-    [SerializeField] private int  maxRetries       = 5;        // Reintentos máximos por sesión
-
-    // ─── Eventos públicos ────────────────────────────────────────────────────
-    public event Action                      OnDatabaseReady;          // Supabase despertó
-    public event Action<bool>                OnScoreSubmitted;         // true = éxito
-    public event Action<LeaderboardWrapper>  OnLeaderboardReceived;    // datos del ranking
-
-    // ─── Estado interno ──────────────────────────────────────────────────────
-    private bool   _isDatabaseReady = false;
-    private bool   _isRetrying      = false;
-    private int    _retryCount      = 0;
-
-    // ─── Endpoints ───────────────────────────────────────────────────────────
-    private string UrlSubmitScore  => $"{supabaseUrl}/rest/v1/rpc/submit_score";
-    private string UrlGetTopScores => $"{supabaseUrl}/rest/v1/rpc/get_top_scores";
-    private string UrlProfiles     => $"{supabaseUrl}/rest/v1/profiles";
-
-    // ─────────────────────────────────────────────────────────────────────────
-    private void Awake()
+    // ─── Estructuras de datos ────────────────────────────────────────────────────
+    [Serializable]
+    public class PlayerScore
     {
-        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
-        Instance = this;
-        DontDestroyOnLoad(gameObject);
+        public int    posicion;
+        public string username;
+        public long   high_score;
     }
 
-    private void Start()
+    [Serializable]
+    public class LeaderboardWrapper
     {
-        // CASO A: Despertar Supabase en segundo plano inmediatamente
-        StartCoroutine(WakeUpRoutine());
+        public PlayerScore[] players;
     }
 
-    // ─── CASO A: Wake-up ─────────────────────────────────────────────────────
     /// <summary>
-    /// Envía una petición liviana al arrancar para que el servidor de Supabase
-    /// salga del estado "dormido" (cold-start de plan gratuito).
+    /// SupabaseManager — Capa de red. Maneja toda la comunicación con Supabase.
+    /// Cubre:
+    ///   A) Wake-up al arrancar (evita cold-start lento).
+    ///   B) UPSERT de puntaje vía RPC (solo guarda si es récord más alto).
+    ///   C) Cola offline: reintenta al detectar conexión.
+    ///   D) Obtención del ranking Top-N.
     /// </summary>
-    private IEnumerator WakeUpRoutine()
+    public class SupabaseManager : MonoBehaviour
     {
-        Debug.Log("[SupabaseManager] Despertando base de datos...");
-        string jsonPayload = "{\"limit_num\": 1}";
+        // ─── Singleton ───────────────────────────────────────────────────────────
+        public static SupabaseManager Instance { get; private set; }
 
-        using (UnityWebRequest req = CreatePostRequest(UrlGetTopScores, jsonPayload))
+        // ─── Configuración (llenar en el Inspector) ───────────────────────────────
+        [Header("Supabase Config")]
+        [SerializeField] private string supabaseUrl    = "https://TU_PROYECTO.supabase.co";
+        [SerializeField] private string supabaseAnonKey = "TU_ANON_KEY";
+
+        [Header("Comportamiento")]
+        [SerializeField] private int  topRankingsCount = 10;       // Cuántos puestos traer
+        [SerializeField] private float retryInterval   = 30f;      // Segundos entre reintentos offline
+        [SerializeField] private int  maxRetries       = 5;        // Reintentos máximos por sesión
+
+        // ─── Eventos públicos ────────────────────────────────────────────────────
+        public event Action                      OnDatabaseReady;          // Supabase despertó
+        public event Action<bool>                OnScoreSubmitted;         // true = éxito
+        public event Action<LeaderboardWrapper>  OnLeaderboardReceived;    // datos del ranking
+
+        // ─── Estado interno ──────────────────────────────────────────────────────
+        private bool   _isDatabaseReady = false;
+        private bool   _isRetrying      = false;
+        private int    _retryCount      = 0;
+
+        // ─── Endpoints ───────────────────────────────────────────────────────────
+        private string UrlSubmitScore  => $"{supabaseUrl}/rest/v1/rpc/submit_score";
+        private string UrlGetTopScores => $"{supabaseUrl}/rest/v1/rpc/get_top_scores";
+        private string UrlProfiles     => $"{supabaseUrl}/rest/v1/profiles";
+
+        // ─────────────────────────────────────────────────────────────────────────
+        private void Awake()
         {
-            yield return req.SendWebRequest();
-
-            if (req.result == UnityWebRequest.Result.Success)
-            {
-                _isDatabaseReady = true;
-                Debug.Log("[SupabaseManager] ✓ Supabase despierto y listo.");
-                OnDatabaseReady?.Invoke();
-
-                // CASO C: Si había puntaje pendiente de sesión anterior, enviarlo ahora
-                CheckAndSyncPendingScore();
-            }
-            else
-            {
-                Debug.LogWarning($"[SupabaseManager] Wake-up falló ({req.error}). Iniciando reintentos...");
-                if (!_isRetrying) StartCoroutine(RetryConnectionRoutine());
-            }
+            if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
         }
-    }
 
-    // ─── CASO C: Cola offline y reintentos ───────────────────────────────────
-    private IEnumerator RetryConnectionRoutine()
-    {
-        _isRetrying = true;
-        while (!_isDatabaseReady && _retryCount < maxRetries)
+        private void Start()
         {
-            _retryCount++;
-            Debug.Log($"[SupabaseManager] Reintento #{_retryCount} en {retryInterval}s...");
-            yield return new WaitForSeconds(retryInterval);
+            // CASO A: Despertar Supabase en segundo plano inmediatamente
+            StartCoroutine(WakeUpRoutine());
+        }
 
-            // Ping de reconexión
-            using (UnityWebRequest req = CreatePostRequest(UrlGetTopScores, "{\"limit_num\": 1}"))
+        // ─── CASO A: Wake-up ─────────────────────────────────────────────────────
+        /// <summary>
+        /// Envía una petición liviana al arrancar para que el servidor de Supabase
+        /// salga del estado "dormido" (cold-start de plan gratuito).
+        /// </summary>
+        private IEnumerator WakeUpRoutine()
+        {
+            Debug.Log("[SupabaseManager] Despertando base de datos...");
+            string jsonPayload = "{\"limit_num\": 1}";
+
+            using (UnityWebRequest req = CreatePostRequest(UrlGetTopScores, jsonPayload))
             {
                 yield return req.SendWebRequest();
+
                 if (req.result == UnityWebRequest.Result.Success)
                 {
                     _isDatabaseReady = true;
-                    _isRetrying = false;
-                    Debug.Log("[SupabaseManager] ✓ Reconexión exitosa.");
+                    Debug.Log("[SupabaseManager] ✓ Supabase despierto y listo.");
                     OnDatabaseReady?.Invoke();
+
+                    // CASO C: Si había puntaje pendiente de sesión anterior, enviarlo ahora
                     CheckAndSyncPendingScore();
-                    yield break;
+                }
+                else
+                {
+                    Debug.LogWarning($"[SupabaseManager] Wake-up falló ({req.error}). Iniciando reintentos...");
+                    if (!_isRetrying) StartCoroutine(RetryConnectionRoutine());
                 }
             }
         }
 
-        if (!_isDatabaseReady)
-            Debug.LogWarning("[SupabaseManager] Se agotaron los reintentos. El puntaje permanece en cola offline.");
-
-        _isRetrying = false;
-    }
-
-    private void CheckAndSyncPendingScore()
-    {
-        if (ScoreManager.Instance == null) return;
-
-        long localBest = ScoreManager.Instance.LocalHighScore;
-        string uname   = ScoreManager.Instance.Username;
-        string uid     = GetUserId();   // Auth UUID si está logueado, DeviceId si no
-
-        // Siempre re-enviar el mejor score local al arrancar con DB lista.
-        // Supabase usa GREATEST, así que solo sube si es mayor al registrado.
-        if (localBest > 0)
+        // ─── CASO C: Cola offline y reintentos ───────────────────────────────────
+        private IEnumerator RetryConnectionRoutine()
         {
-            Debug.Log($"[SupabaseManager] Sincronizando score local al arrancar: {localBest} pts.");
-            StartCoroutine(SubmitScoreRoutine(uid, uname, localBest));
-        }
-        else if (ScoreManager.Instance.HasPendingSync)
-        {
-            long pending = ScoreManager.Instance.PendingScore;
-            Debug.Log($"[SupabaseManager] Puntaje offline pendiente detectado: {pending}. Sincronizando...");
-            StartCoroutine(SubmitScoreRoutine(uid, uname, pending));
-        }
-    }
-
-    // ─── CASO B: Envío de puntaje ─────────────────────────────────────────────
-    /// <summary>
-    /// Envía el puntaje a Supabase. Usa el userId del usuario autenticado automáticamente.
-    /// Si no hay conexión, lo deja marcado en PlayerPrefs para sincronizar más tarde (Caso C).
-    /// </summary>
-    public void SubmitScore(long score, string username = null, string userId = null)
-    {
-        string uid   = userId   ?? GetUserId();
-        string uname = username ?? GetUsername();
-
-        if (_isDatabaseReady)
-        {
-            StartCoroutine(SubmitScoreRoutine(uid, uname, score));
-        }
-        else
-        {
-            // Sin conexión: persiste localmente
-            ScoreManager.Instance?.MarkScoreAsPending(score);
-            Debug.LogWarning("[SupabaseManager] Sin conexión. Puntaje guardado offline.");
-
-            if (!_isRetrying) StartCoroutine(RetryConnectionRoutine());
-        }
-    }
-
-    private IEnumerator SubmitScoreRoutine(string userId, string username, long score)
-    {
-        string json = $"{{\"p_user_id\":\"{userId}\",\"p_username\":\"{EscapeJson(username)}\",\"p_score\":{score}}}";
-
-        using (UnityWebRequest req = CreatePostRequest(UrlSubmitScore, json))
-        {
-            yield return req.SendWebRequest();
-
-            if (req.result == UnityWebRequest.Result.Success)
+            _isRetrying = true;
+            while (!_isDatabaseReady && _retryCount < maxRetries)
             {
-                Debug.Log($"[SupabaseManager] ✓ Puntaje {score} sincronizado correctamente.");
-                ScoreManager.Instance?.ClearPendingSync();
-                OnScoreSubmitted?.Invoke(true);
+                _retryCount++;
+                Debug.Log($"[SupabaseManager] Reintento #{_retryCount} en {retryInterval}s...");
+                yield return new WaitForSeconds(retryInterval);
+
+                // Ping de reconexión
+                using (UnityWebRequest req = CreatePostRequest(UrlGetTopScores, "{\"limit_num\": 1}"))
+                {
+                    yield return req.SendWebRequest();
+                    if (req.result == UnityWebRequest.Result.Success)
+                    {
+                        _isDatabaseReady = true;
+                        _isRetrying = false;
+                        Debug.Log("[SupabaseManager] ✓ Reconexión exitosa.");
+                        OnDatabaseReady?.Invoke();
+                        CheckAndSyncPendingScore();
+                        yield break;
+                    }
+                }
+            }
+
+            if (!_isDatabaseReady)
+                Debug.LogWarning("[SupabaseManager] Se agotaron los reintentos. El puntaje permanece en cola offline.");
+
+            _isRetrying = false;
+        }
+
+        private void CheckAndSyncPendingScore()
+        {
+            if (ScoreManager.Instance == null) return;
+
+            long localBest = ScoreManager.Instance.LocalHighScore;
+            string uname   = ScoreManager.Instance.Username;
+            string uid     = GetUserId();   // Auth UUID si está logueado, DeviceId si no
+
+            // Siempre re-enviar el mejor score local al arrancar con DB lista.
+            // Supabase usa GREATEST, así que solo sube si es mayor al registrado.
+            if (localBest > 0)
+            {
+                Debug.Log($"[SupabaseManager] Sincronizando score local al arrancar: {localBest} pts.");
+                StartCoroutine(SubmitScoreRoutine(uid, uname, localBest));
+            }
+            else if (ScoreManager.Instance.HasPendingSync)
+            {
+                long pending = ScoreManager.Instance.PendingScore;
+                Debug.Log($"[SupabaseManager] Puntaje offline pendiente detectado: {pending}. Sincronizando...");
+                StartCoroutine(SubmitScoreRoutine(uid, uname, pending));
+            }
+        }
+
+        // ─── CASO B: Envío de puntaje ─────────────────────────────────────────────
+        /// <summary>
+        /// Envía el puntaje a Supabase. Usa el userId del usuario autenticado automáticamente.
+        /// Si no hay conexión, lo deja marcado en PlayerPrefs para sincronizar más tarde (Caso C).
+        /// </summary>
+        public void SubmitScore(long score, string username = null, string userId = null)
+        {
+            string uid   = userId   ?? GetUserId();
+            string uname = username ?? GetUsername();
+
+            if (_isDatabaseReady)
+            {
+                StartCoroutine(SubmitScoreRoutine(uid, uname, score));
             }
             else
             {
-                Debug.LogWarning($"[SupabaseManager] Error al enviar puntaje: {req.error}. Queda en cola offline.");
+                // Sin conexión: persiste localmente
                 ScoreManager.Instance?.MarkScoreAsPending(score);
-                OnScoreSubmitted?.Invoke(false);
+                Debug.LogWarning("[SupabaseManager] Sin conexión. Puntaje guardado offline.");
 
                 if (!_isRetrying) StartCoroutine(RetryConnectionRoutine());
             }
         }
-    }
 
-    // ─── CASO E: Sincronizar progreso CELERIS ────────────────────────────────
-    /// <summary>
-    /// Actualiza los campos de progreso del jugador autenticado en la tabla profiles.
-    /// Llama automáticamente a este método desde ScoreManager.RecordLevelResult().
-    /// Solo ejecuta si el usuario está logueado y la DB está lista.
-    /// </summary>
-    public void SyncPlayerProgress()
-    {
-        if (!_isDatabaseReady)
+        private IEnumerator SubmitScoreRoutine(string userId, string username, long score)
         {
-            Debug.Log("[SupabaseManager] DB no lista, progreso queda en PlayerPrefs.");
-            return;
-        }
-        if (AuthManager.Instance == null || !AuthManager.Instance.IsLoggedIn) return;
-        if (ScoreManager.Instance == null) return;
+            string json = $"{{\"p_user_id\":\"{userId}\",\"p_username\":\"{EscapeJson(username)}\",\"p_score\":{score}}}";
 
-        StartCoroutine(SyncProgressRoutine());
-    }
-
-    private IEnumerator SyncProgressRoutine()
-    {
-        string userId = GetUserId();
-        if (string.IsNullOrEmpty(userId)) yield break;
-
-        var sm = ScoreManager.Instance;
-
-        // PATCH sobre la fila cuyo id coincide con el UUID del usuario autenticado.
-        // No toca high_score: eso lo maneja el RPC submit_score con lógica "solo sube".
-        string url  = $"{UrlProfiles}?id=eq.{userId}";
-        string json = $"{{" +
-            $"\"max_unlocked_level\":{sm.MaxUnlockedLevel}," +
-            $"\"levels_completed\":{sm.LevelsCompleted}," +
-            $"\"times_played\":{sm.TimesPlayed}," +
-            $"\"total_stars\":{sm.TotalStars}" +
-            $"}}";
-
-        UnityWebRequest req = new UnityWebRequest(url, "PATCH");
-        byte[] raw = Encoding.UTF8.GetBytes(json);
-        req.uploadHandler   = new UploadHandlerRaw(raw);
-        req.downloadHandler = new DownloadHandlerBuffer();
-        req.SetRequestHeader("Content-Type",  "application/json");
-        req.SetRequestHeader("apikey",        supabaseAnonKey);
-        req.SetRequestHeader("Authorization", $"Bearer {AuthManager.Instance.AccessToken}");
-        req.SetRequestHeader("Prefer",        "return=minimal");   // no necesitamos la respuesta
-
-        yield return req.SendWebRequest();
-
-        if (req.result == UnityWebRequest.Result.Success)
-            Debug.Log("[SupabaseManager] ✓ Progreso del jugador sincronizado.");
-        else
-            Debug.LogWarning($"[SupabaseManager] Error sincronizando progreso: {req.error}");
-    }
-
-    // ─── CASO D: Obtener ranking ──────────────────────────────────────────────
-    /// <summary>Solicita el Top-N al servidor y lo entrega vía callback y evento.</summary>
-    public void FetchLeaderboard(Action<LeaderboardWrapper> callback = null, int limit = -1)
-    {
-        int count = limit > 0 ? limit : topRankingsCount;
-        StartCoroutine(FetchLeaderboardRoutine(callback, count));
-    }
-
-    private IEnumerator FetchLeaderboardRoutine(Action<LeaderboardWrapper> callback, int limit)
-    {
-        string json = $"{{\"limit_num\":{limit}}}";
-
-        using (UnityWebRequest req = CreatePostRequest(UrlGetTopScores, json))
-        {
-            yield return req.SendWebRequest();
-
-            if (req.result == UnityWebRequest.Result.Success)
+            using (UnityWebRequest req = CreatePostRequest(UrlSubmitScore, json))
             {
-                string raw     = req.downloadHandler.text;
-                Debug.Log($"[SupabaseManager] Raw response: {raw}");   // ← log temporal
-                string wrapped = "{\"players\":" + raw + "}";
+                yield return req.SendWebRequest();
 
-                LeaderboardWrapper data = JsonUtility.FromJson<LeaderboardWrapper>(wrapped);
-                Debug.Log($"[SupabaseManager] ✓ Ranking recibido: {data?.players?.Length ?? 0} entradas.");
+                if (req.result == UnityWebRequest.Result.Success)
+                {
+                    Debug.Log($"[SupabaseManager] ✓ Puntaje {score} sincronizado correctamente.");
+                    ScoreManager.Instance?.ClearPendingSync();
+                    OnScoreSubmitted?.Invoke(true);
+                }
+                else
+                {
+                    Debug.LogWarning($"[SupabaseManager] Error al enviar puntaje: {req.error}. Queda en cola offline.");
+                    ScoreManager.Instance?.MarkScoreAsPending(score);
+                    OnScoreSubmitted?.Invoke(false);
 
-                OnLeaderboardReceived?.Invoke(data);
-                callback?.Invoke(data);
-            }
-            else
-            {
-                Debug.LogError($"[SupabaseManager] Error al obtener ranking: {req.error}");
-                callback?.Invoke(null);
+                    if (!_isRetrying) StartCoroutine(RetryConnectionRoutine());
+                }
             }
         }
-    }
 
-    // ─── Progreso del jugador desde Supabase ─────────────────────────────────
-    /// <summary>
-    /// Obtiene el max_unlocked_level del perfil del usuario autenticado.
-    /// Devuelve -1 en el callback si no hay conexión o el perfil no existe.
-    /// AuthManager llama esto tras un login/registro exitoso.
-    /// </summary>
-    public void FetchPlayerProgress(string userId, string accessToken, Action<int> callback)
-    {
-        if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(accessToken))
+        // ─── CASO E: Sincronizar progreso CELERIS ────────────────────────────────
+        /// <summary>
+        /// Actualiza los campos de progreso del jugador autenticado en la tabla profiles.
+        /// Llama automáticamente a este método desde ScoreManager.RecordLevelResult().
+        /// Solo ejecuta si el usuario está logueado y la DB está lista.
+        /// </summary>
+        public void SyncPlayerProgress()
         {
-            callback?.Invoke(-1);
-            return;
-        }
-        StartCoroutine(FetchProgressRoutine(userId, accessToken, callback));
-    }
+            if (!_isDatabaseReady)
+            {
+                Debug.Log("[SupabaseManager] DB no lista, progreso queda en PlayerPrefs.");
+                return;
+            }
+            if (AuthManager.Instance == null || !AuthManager.Instance.IsLoggedIn) return;
+            if (ScoreManager.Instance == null) return;
 
-    private IEnumerator FetchProgressRoutine(string userId, string token, Action<int> callback)
-    {
-        string url = $"{UrlProfiles}?id=eq.{userId}&select=max_unlocked_level";
-
-        UnityWebRequest req = UnityWebRequest.Get(url);
-        req.SetRequestHeader("apikey",        supabaseAnonKey);
-        req.SetRequestHeader("Authorization", $"Bearer {token}");
-
-        yield return req.SendWebRequest();
-
-        if (req.result != UnityWebRequest.Result.Success)
-        {
-            Debug.LogWarning($"[SupabaseManager] No se pudo obtener progreso: {req.error}");
-            callback?.Invoke(-1);
-            yield break;
+            StartCoroutine(SyncProgressRoutine());
         }
 
-        // Respuesta: [{"max_unlocked_level":3}]  o  []  (perfil nuevo sin nivel)
-        string raw   = req.downloadHandler.text;
-        string field = ExtractIntField(raw, "max_unlocked_level");
-
-        if (int.TryParse(field, out int level))
+        private IEnumerator SyncProgressRoutine()
         {
-            Debug.Log($"[SupabaseManager] Progreso del servidor: max_unlocked_level={level}");
-            callback?.Invoke(level);
+            string userId = GetUserId();
+            if (string.IsNullOrEmpty(userId)) yield break;
+
+            var sm = ScoreManager.Instance;
+
+            // PATCH sobre la fila cuyo id coincide con el UUID del usuario autenticado.
+            // No toca high_score: eso lo maneja el RPC submit_score con lógica "solo sube".
+            string url  = $"{UrlProfiles}?id=eq.{userId}";
+            string json = $"{{" +
+                $"\"max_unlocked_level\":{sm.MaxUnlockedLevel}," +
+                $"\"levels_completed\":{sm.LevelsCompleted}," +
+                $"\"times_played\":{sm.TimesPlayed}," +
+                $"\"total_stars\":{sm.TotalStars}" +
+                $"}}";
+
+            using (UnityWebRequest req = new UnityWebRequest(url, "PATCH"))
+            {
+                byte[] raw = Encoding.UTF8.GetBytes(json);
+                req.uploadHandler   = new UploadHandlerRaw(raw);
+                req.downloadHandler = new DownloadHandlerBuffer();
+                req.SetRequestHeader("Content-Type",  "application/json");
+                req.SetRequestHeader("apikey",        supabaseAnonKey);
+                req.SetRequestHeader("Authorization", $"Bearer {AuthManager.Instance.AccessToken}");
+                req.SetRequestHeader("Prefer",        "return=minimal");
+
+                yield return req.SendWebRequest();
+
+                if (req.result == UnityWebRequest.Result.Success)
+                    Debug.Log("[SupabaseManager] ✓ Progreso del jugador sincronizado.");
+                else
+                    Debug.LogWarning($"[SupabaseManager] Error sincronizando progreso: {req.error}");
+            }
         }
-        else
+
+        // ─── CASO D: Obtener ranking ──────────────────────────────────────────────
+        /// <summary>Solicita el Top-N al servidor y lo entrega vía callback y evento.</summary>
+        public void FetchLeaderboard(Action<LeaderboardWrapper> callback = null, int limit = -1)
         {
-            // Perfil nuevo o campo no encontrado → empieza en 0
-            Debug.Log("[SupabaseManager] Perfil sin progreso registrado → nivel 0.");
-            callback?.Invoke(0);
+            int count = limit > 0 ? limit : topRankingsCount;
+            StartCoroutine(FetchLeaderboardRoutine(callback, count));
         }
+
+        private IEnumerator FetchLeaderboardRoutine(Action<LeaderboardWrapper> callback, int limit)
+        {
+            string json = $"{{\"limit_num\":{limit}}}";
+
+            using (UnityWebRequest req = CreatePostRequest(UrlGetTopScores, json))
+            {
+                yield return req.SendWebRequest();
+
+                if (req.result == UnityWebRequest.Result.Success)
+                {
+                    string raw     = req.downloadHandler.text;
+                    Debug.Log($"[SupabaseManager] Raw response: {raw}");   // ← log temporal
+                    string wrapped = "{\"players\":" + raw + "}";
+
+                    LeaderboardWrapper data = JsonUtility.FromJson<LeaderboardWrapper>(wrapped);
+                    Debug.Log($"[SupabaseManager] ✓ Ranking recibido: {data?.players?.Length ?? 0} entradas.");
+
+                    OnLeaderboardReceived?.Invoke(data);
+                    callback?.Invoke(data);
+                }
+                else
+                {
+                    Debug.LogError($"[SupabaseManager] Error al obtener ranking: {req.error}");
+                    callback?.Invoke(null);
+                }
+            }
+        }
+
+        // ─── Progreso del jugador desde Supabase ─────────────────────────────────
+        /// <summary>
+        /// Obtiene el max_unlocked_level del perfil del usuario autenticado.
+        /// Devuelve -1 en el callback si no hay conexión o el perfil no existe.
+        /// AuthManager llama esto tras un login/registro exitoso.
+        /// </summary>
+        public void FetchPlayerProgress(string userId, string accessToken, Action<int> callback)
+        {
+            if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(accessToken))
+            {
+                callback?.Invoke(-1);
+                return;
+            }
+            StartCoroutine(FetchProgressRoutine(userId, accessToken, callback));
+        }
+
+        private IEnumerator FetchProgressRoutine(string userId, string token, Action<int> callback)
+        {
+            string url = $"{UrlProfiles}?id=eq.{userId}&select=max_unlocked_level";
+
+            using (UnityWebRequest req = UnityWebRequest.Get(url))
+            {
+                req.SetRequestHeader("apikey",        supabaseAnonKey);
+                req.SetRequestHeader("Authorization", $"Bearer {token}");
+
+                yield return req.SendWebRequest();
+
+                if (req.result != UnityWebRequest.Result.Success)
+                {
+                    Debug.LogWarning($"[SupabaseManager] No se pudo obtener progreso: {req.error}");
+                    callback?.Invoke(-1);
+                    yield break;
+                }
+
+                // Respuesta: [{"max_unlocked_level":3}]  o  []  (perfil nuevo sin nivel)
+                string raw   = req.downloadHandler.text;
+                string field = ExtractIntField(raw, "max_unlocked_level");
+
+                if (int.TryParse(field, out int level))
+                {
+                    Debug.Log($"[SupabaseManager] Progreso del servidor: max_unlocked_level={level}");
+                    callback?.Invoke(level);
+                }
+                else
+                {
+                    Debug.Log("[SupabaseManager] Perfil sin progreso registrado → nivel 0.");
+                    callback?.Invoke(0);
+                }
+            }
+        }
+
+        // Extrae el valor entero de "campo":N del primer objeto del array JSON
+        private string ExtractIntField(string json, string field)
+        {
+            string search = $"\"{field}\":";
+            int start = json.IndexOf(search, System.StringComparison.Ordinal);
+            if (start < 0) return null;
+            start += search.Length;
+            // saltar espacios
+            while (start < json.Length && json[start] == ' ') start++;
+            int end = start;
+            while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '-')) end++;
+            return end > start ? json.Substring(start, end - start) : null;
+        }
+
+        // ─── Helpers ──────────────────────────────────────────────────────────────
+        private UnityWebRequest CreatePostRequest(string url, string jsonBody)
+        {
+            UnityWebRequest req = new UnityWebRequest(url, "POST");
+            byte[] raw = Encoding.UTF8.GetBytes(jsonBody);
+
+            req.uploadHandler   = new UploadHandlerRaw(raw);
+            req.downloadHandler = new DownloadHandlerBuffer();
+
+            req.SetRequestHeader("Content-Type", "application/json");
+            req.SetRequestHeader("apikey",       supabaseAnonKey);
+
+            // Usar JWT del usuario autenticado si está disponible; si no, anon key
+            string token = (AuthManager.Instance != null && AuthManager.Instance.IsLoggedIn)
+                ? AuthManager.Instance.AccessToken
+                : supabaseAnonKey;
+            req.SetRequestHeader("Authorization", $"Bearer {token}");
+
+            req.timeout = 10;   // Abortar en 10 s; la cola offline captura el error
+            return req;
+        }
+
+        // ─── Obtener userId correcto (Auth UUID tiene prioridad sobre DeviceID) ───
+        private string GetUserId()
+        {
+            if (AuthManager.Instance != null && AuthManager.Instance.IsLoggedIn &&
+                AuthManager.Instance.CurrentUser != null)
+                return AuthManager.Instance.CurrentUser.id;
+
+            return ScoreManager.Instance?.DeviceId ?? System.Guid.NewGuid().ToString();
+        }
+
+        private string GetUsername()
+        {
+            if (AuthManager.Instance != null && AuthManager.Instance.IsLoggedIn &&
+                !string.IsNullOrEmpty(AuthManager.Instance.Username))
+                return AuthManager.Instance.Username;
+
+            return ScoreManager.Instance?.Username ?? "Jugador";
+        }
+
+        /// <summary>Escapa caracteres especiales en strings para JSON seguro.</summary>
+        private string EscapeJson(string s) =>
+            s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "").Replace("\r", "");
     }
 
-    // Extrae el valor entero de "campo":N del primer objeto del array JSON
-    private string ExtractIntField(string json, string field)
-    {
-        string search = $"\"{field}\":";
-        int start = json.IndexOf(search, System.StringComparison.Ordinal);
-        if (start < 0) return null;
-        start += search.Length;
-        // saltar espacios
-        while (start < json.Length && json[start] == ' ') start++;
-        int end = start;
-        while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '-')) end++;
-        return end > start ? json.Substring(start, end - start) : null;
-    }
 
-    // ─── Helpers ──────────────────────────────────────────────────────────────
-    private UnityWebRequest CreatePostRequest(string url, string jsonBody)
-    {
-        UnityWebRequest req = new UnityWebRequest(url, "POST");
-        byte[] raw = Encoding.UTF8.GetBytes(jsonBody);
+    // Acción en SupabaseManager.cs: Busca el método equivalente donde construyes tus peticiones (por ejemplo, los métodos que devuelven un UnityWebRequest para el ranking o el UPSERT). Añade el mismo límite de tiempo. Si la red fluctúa, la petición abortará limpiamente en 10 segundos y tu sistema de "Cola Offline" podrá capturar el error y guardar el puntaje como pendiente.
 
-        req.uploadHandler   = new UploadHandlerRaw(raw);
-        req.downloadHandler = new DownloadHandlerBuffer();
+    // Acción en Cliente (SupabaseManager.cs): Modifica la estructura del método de envío de puntaje (SubmitScore). En lugar de hacer un POST/UPSERT directo a la tabla de la base de datos enviando la variable LocalHighScore, cambia el endpoint HTTP para llamar a una función RPC (Remote Procedure Call) o una Edge Function en tu Supabase. Tu payload JSON ya no debe llevar el puntaje final, sino las métricas "crudas" del juego (nivel global actual, número de intentos de esa sesión, tiempo tomado).
 
-        req.SetRequestHeader("Content-Type", "application/json");
-        req.SetRequestHeader("apikey",       supabaseAnonKey);
-
-        // Usar JWT del usuario autenticado si está disponible; si no, anon key
-        string token = (AuthManager.Instance != null && AuthManager.Instance.IsLoggedIn)
-            ? AuthManager.Instance.AccessToken
-            : supabaseAnonKey;
-        req.SetRequestHeader("Authorization", $"Bearer {token}");
-
-        req.timeout = 10;   // Abortar en 10 s; la cola offline captura el error
-        return req;
-    }
-
-    // ─── Obtener userId correcto (Auth UUID tiene prioridad sobre DeviceID) ───
-    private string GetUserId()
-    {
-        if (AuthManager.Instance != null && AuthManager.Instance.IsLoggedIn &&
-            AuthManager.Instance.CurrentUser != null)
-            return AuthManager.Instance.CurrentUser.id;
-
-        return ScoreManager.Instance?.DeviceId ?? System.Guid.NewGuid().ToString();
-    }
-
-    private string GetUsername()
-    {
-        if (AuthManager.Instance != null && AuthManager.Instance.IsLoggedIn &&
-            !string.IsNullOrEmpty(AuthManager.Instance.Username))
-            return AuthManager.Instance.Username;
-
-        return ScoreManager.Instance?.Username ?? "Jugador";
-    }
-
-    /// <summary>Escapa caracteres especiales en strings para JSON seguro.</summary>
-    private string EscapeJson(string s) =>
-        s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "").Replace("\r", "");
+    // Acción en Servidor (Supabase): Crea una función en Postgres (RPC) o una Edge Function (Deno/TypeScript) que reciba estas métricas. En esta función del servidor, replica la lógica matemática que tienes en HackSessionData.CalculateScoreReward(). El servidor validará la coherencia de los datos, calculará el puntaje final y será el propio servidor el que ejecute el INSERT o UPSERT en la tabla. Esto vuelve inútil cualquier manipulación de la clave anónima desde el APK.
 }
-
-
-// Acción en SupabaseManager.cs: Busca el método equivalente donde construyes tus peticiones (por ejemplo, los métodos que devuelven un UnityWebRequest para el ranking o el UPSERT). Añade el mismo límite de tiempo. Si la red fluctúa, la petición abortará limpiamente en 10 segundos y tu sistema de "Cola Offline" podrá capturar el error y guardar el puntaje como pendiente.
-
-// Acción en Cliente (SupabaseManager.cs): Modifica la estructura del método de envío de puntaje (SubmitScore). En lugar de hacer un POST/UPSERT directo a la tabla de la base de datos enviando la variable LocalHighScore, cambia el endpoint HTTP para llamar a una función RPC (Remote Procedure Call) o una Edge Function en tu Supabase. Tu payload JSON ya no debe llevar el puntaje final, sino las métricas "crudas" del juego (nivel global actual, número de intentos de esa sesión, tiempo tomado).
-
-// Acción en Servidor (Supabase): Crea una función en Postgres (RPC) o una Edge Function (Deno/TypeScript) que reciba estas métricas. En esta función del servidor, replica la lógica matemática que tienes en HackSessionData.CalculateScoreReward(). El servidor validará la coherencia de los datos, calculará el puntaje final y será el propio servidor el que ejecute el INSERT o UPSERT en la tabla. Esto vuelve inútil cualquier manipulación de la clave anónima desde el APK.

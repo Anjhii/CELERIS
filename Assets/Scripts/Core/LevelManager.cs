@@ -1,25 +1,29 @@
 // ============================================================
-// LevelManager.cs  |  Assets/Scripts/Core/
+// LevelManager.cs  |  Assets/Scripts/Core/  — v3 SOLID
 //
 // PROGRESO POR USUARIO:
 //   El nivel actual se guarda bajo la clave
-//   "CELERIS_Level_{userId}" en PlayerPrefs, donde userId es
-//   el UUID de Supabase del jugador autenticado.
-//   Esto garantiza que cada cuenta tenga su propio progreso,
-//   incluso en el mismo dispositivo.
+//   "CELERIS_Level_{userId}" via IPlayerProgressStore.
+//   Mientras no hay sesion se usa la clave anonima.
+//   Al hacer BindToUser() se conmuta a la clave del usuario.
+//   Al hacer UnbindUser() se vuelve a la clave anonima.
 //
-//   Flujo de autenticación:
-//     Login/Registro → AuthManager.ApplySession()
-//       → LevelManager.BindToUser(userId)      (cambia la clave activa)
-//       → LevelManager.ApplyServerProgress(n)  (aplica nivel del servidor)
-//     Logout → AuthManager.ClearSession()
-//       → LevelManager.UnbindUser()            (vuelve a clave anónima / 0)
+// CAMBIOS v2 (Bloque 5):
+//   Toda lectura/escritura de PlayerPrefs eliminada de este archivo.
+//   Reemplazada por IPlayerProgressStore (inyectado en Awake).
 //
-// API PÚBLICA:
+// CAMBIOS v3 (F4-T5 — Game Director):
+//   Integración de IDifficultyDirector (DIP).
+//   Apply() se llama antes de cargar GameplayScene.
+//   RecordLevelResult() se llama tras cada resultado.
+//   debugForceD >= 0 inyecta NullDifficultyDirector (QA).
+//
+// API PUBLICA (sin cambios de firma):
 //   LevelManager.CurrentLevelIndex / CurrentLevelNumber
 //   LevelManager.Instance.BindToUser(userId)
 //   LevelManager.Instance.ApplyServerProgress(levelIndex)
 //   LevelManager.Instance.UnbindUser()
+//   LevelManager.Instance.NotifyLevelResult(won, time, battery, cause)
 //   LevelManager.Instance.AdvanceLevel()
 //   LevelManager.Instance.RetryCurrentLevel()
 //   LevelManager.Instance.ResetProgress()
@@ -27,6 +31,7 @@
 //   LevelManager.EnsureExists()
 // ============================================================
 using Celeris.Config;
+using Celeris.Data;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -37,36 +42,53 @@ namespace Celeris.Core
         // ── Singleton ─────────────────────────────────────────
         public static LevelManager Instance { get; private set; }
 
-        // ── Inspector ─────────────────────────────────────────
-        [Header("── Estado (solo lectura en Play) ──")]
-        [SerializeField] private string _nivelActual   = "–";
-        [SerializeField] private string _totalNiveles  = "–";
-        [SerializeField] private string _configActiva  = "–";
-        [SerializeField] private string _usuarioActivo = "anónimo";
+        // ── Inspector (solo lectura en Play) ──────────────────
+        [Header("Estado (solo lectura en Play)")]
+        [SerializeField] private string _nivelActual   = "-";
+        [SerializeField] private string _totalNiveles  = "-";
+        [SerializeField] private string _configActiva  = "-";
+        [SerializeField] private string _usuarioActivo = "anonimo";
 
         // ── Clave de progreso (cambia al autenticarse) ────────
-        // Mientras no hay sesión se usa la clave anónima.
-        // Al hacer BindToUser() se conmuta a la clave del usuario.
-        private const string ANON_KEY    = "CELERIS_Level_anon";
-        private const string KEY_PREFIX  = "CELERIS_Level_";
-        private string       _activeKey  = ANON_KEY;
+        private const string ANON_KEY   = "CELERIS_Level_anon";
+        private const string KEY_PREFIX = "CELERIS_Level_";
+        private string       _activeKey = ANON_KEY;
+
+        // ── Dependencias inyectadas (DIP) ────────────────────
+        private IPlayerProgressStore _store;
+        private IDifficultyDirector  _director;
+
+        // ── Debug: forzar D constante (QA / diseño de niveles) ─
+        [Header("Game Director (Debug)")]
+        [Tooltip("-1 = director real. 0-1 = NullDifficultyDirector con ese D fijo.")]
+        [Range(-1f, 1f)]
+        public float debugForceD = -1f;
 
         // ── Propiedad de nivel actual ─────────────────────────
         public static int CurrentLevelIndex
         {
-            get => PlayerPrefs.GetInt(
-                       Instance != null ? Instance._activeKey : ANON_KEY, 0);
+            get
+            {
+                if (Instance == null || Instance._store == null)
+                    return PlayerPrefs.GetInt(ANON_KEY, 0); // fallback de emergencia
+                return Instance._store.GetLevelIndex(Instance._activeKey);
+            }
             private set
             {
-                PlayerPrefs.SetInt(
-                    Instance != null ? Instance._activeKey : ANON_KEY, value);
-                PlayerPrefs.Save();
+                if (Instance == null || Instance._store == null)
+                {
+                    PlayerPrefs.SetInt(ANON_KEY, value);
+                    PlayerPrefs.Save();
+                    return;
+                }
+                Instance._store.SetLevelIndex(Instance._activeKey, value);
+                // Persistencia diferida — el store la ejecuta en pause/quit.
             }
         }
 
         public static int CurrentLevelNumber => CurrentLevelIndex + 1;
 
-        // ── Total de niveles ──────────────────────────────────
+        // ── Total de niveles (cacheado) ───────────────────────
         private int _totalLevelsCached = -1;
         public int TotalLevels
         {
@@ -97,6 +119,20 @@ namespace Celeris.Core
             }
             Instance = this;
             DontDestroyOnLoad(gameObject);
+
+            _store = PlayerProgressStore.EnsureExists();
+
+            // F4-T5: inyectar director según modo debug o producción
+            if (debugForceD >= 0f)
+            {
+                _director = new NullDifficultyDirector(debugForceD);
+                Debug.Log($"[LevelManager] Game Director en modo DEBUG — D fijo={debugForceD:F2}");
+            }
+            else
+            {
+                _director = new DifficultyDirectorImpl(_store);
+            }
+
             RefreshDebugFields();
             Debug.Log($"[LevelManager] Iniciado — clave='{_activeKey}' " +
                       $"Nivel {CurrentLevelNumber}");
@@ -107,37 +143,26 @@ namespace Celeris.Core
             _nivelActual  = $"Nivel {CurrentLevelNumber} (idx {CurrentLevelIndex})";
             _totalNiveles = TotalLevels.ToString();
             var cfg = CurrentConfig;
-            _configActiva = cfg != null ? cfg.name : "⚠ NO ENCONTRADA";
+            _configActiva = cfg != null ? cfg.name : "NO ENCONTRADA";
         }
 
         // ── API de usuario ────────────────────────────────────
 
-        /// <summary>
-        /// Enlaza el progreso al userId autenticado.
-        /// Cambia la clave activa a "CELERIS_Level_{userId}".
-        /// Si el usuario no tiene registro local, empieza en 0
-        /// hasta que llegue el valor del servidor vía ApplyServerProgress().
-        /// </summary>
         public void BindToUser(string userId)
         {
             if (string.IsNullOrEmpty(userId))
             {
-                Debug.LogWarning("[LevelManager] BindToUser: userId vacío.");
+                Debug.LogWarning("[LevelManager] BindToUser: userId vacio.");
                 return;
             }
 
-            _activeKey    = KEY_PREFIX + userId;
-            _usuarioActivo = userId.Substring(0, Mathf.Min(8, userId.Length)) + "…";
+            _activeKey     = KEY_PREFIX + userId;
+            _usuarioActivo = userId.Substring(0, Mathf.Min(8, userId.Length)) + "...";
             RefreshDebugFields();
-            Debug.Log($"[LevelManager] Progreso enlazado al usuario → " +
+            Debug.Log($"[LevelManager] Progreso enlazado al usuario -> " +
                       $"clave='{_activeKey}', nivel local={CurrentLevelNumber}");
         }
 
-        /// <summary>
-        /// Aplica el nivel que llegó del servidor (Supabase profiles.max_unlocked_level).
-        /// Solo sobreescribe si el valor del servidor es mayor que el local,
-        /// para no retroceder progreso ante fallos de sincronización.
-        /// </summary>
         public void ApplyServerProgress(int serverLevelIndex)
         {
             int clamped = Mathf.Clamp(serverLevelIndex, 0, TotalLevels - 1);
@@ -145,31 +170,26 @@ namespace Celeris.Core
             if (clamped > CurrentLevelIndex)
             {
                 CurrentLevelIndex = clamped;
-                Debug.Log($"[LevelManager] Progreso del servidor aplicado → " +
+                Debug.Log($"[LevelManager] Progreso del servidor aplicado -> " +
                           $"Nivel {CurrentLevelNumber}");
             }
             else
             {
-                Debug.Log($"[LevelManager] Progreso local ({CurrentLevelNumber}) ≥ " +
+                Debug.Log($"[LevelManager] Progreso local ({CurrentLevelNumber}) >= " +
                           $"servidor ({clamped + 1}). Se mantiene el local.");
             }
 
             RefreshDebugFields();
         }
 
-        /// <summary>
-        /// Desenlaza el usuario (al hacer logout).
-        /// Vuelve a la clave anónima, que empieza en 0.
-        /// </summary>
         public void UnbindUser()
         {
-            _activeKey    = ANON_KEY;
-            _usuarioActivo = "anónimo";
+            // Borrar la clave anonima para que el siguiente usuario empiece limpio
+            _store.DeleteKey(ANON_KEY);
+            _store.FlushIfDirty();
 
-            // Limpiar la clave anónima para que el siguiente usuario empiece limpio
-            PlayerPrefs.DeleteKey(ANON_KEY);
-            PlayerPrefs.Save();
-
+            _activeKey     = ANON_KEY;
+            _usuarioActivo = "anonimo";
             RefreshDebugFields();
             Debug.Log("[LevelManager] Usuario desenlazado. Progreso en 0.");
         }
@@ -184,7 +204,7 @@ namespace Celeris.Core
             return Instance;
         }
 
-        // ── API de navegación ─────────────────────────────────
+        // ── API de navegacion ─────────────────────────────────
 
         public ProceduralLevelConfig GetConfig(int levelIndex)
         {
@@ -211,6 +231,19 @@ namespace Celeris.Core
             SceneManager.LoadScene("GameplayScene");
         }
 
+        // ── F4-T5: Notificar resultado de nivel al director ───
+        /// <summary>
+        /// Llamar desde GameOverTrigger o GameFlowManager tras cada victoria/muerte.
+        /// El director actualizará D y lo persistirá en IPlayerProgressStore.
+        /// </summary>
+        public void NotifyLevelResult(bool won, float completionTime,
+                                      float batteryConsumed, DeathCause lastDeath)
+        {
+            _director?.RecordLevelResult(won, completionTime, batteryConsumed, lastDeath);
+            Debug.Log($"[LevelManager] Resultado registrado — won={won} " +
+                      $"D={_director?.CurrentDifficulty:F2}");
+        }
+
         public void AdvanceLevel()
         {
             int next = CurrentLevelIndex + 1;
@@ -224,13 +257,25 @@ namespace Celeris.Core
             {
                 CurrentLevelIndex = next;
                 RefreshDebugFields();
-                Debug.Log($"[LevelManager] → Nivel {CurrentLevelNumber}");
+
+                // F4-T5: aplicar dificultad al config del PRÓXIMO nivel antes de cargar.
+                var nextConfig = CurrentConfig;
+                if (nextConfig != null)
+                    _director?.Apply(nextConfig);
+
+                Debug.Log($"[LevelManager] -> Nivel {CurrentLevelNumber} " +
+                          $"D={_director?.CurrentDifficulty:F2}");
                 SceneManager.LoadScene("GameplayScene");
             }
         }
 
         public void RetryCurrentLevel()
         {
+            // F4-T5: re-aplicar dificultad al config actual (D no cambia en retry).
+            var cfg = CurrentConfig;
+            if (cfg != null)
+                _director?.Apply(cfg);
+
             SceneManager.LoadScene("GameplayScene");
         }
 

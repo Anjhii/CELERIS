@@ -1,7 +1,7 @@
 using System.Collections;
 using UnityEngine;
 
-namespace Celeris.Core
+namespace Celeris.Escenario
 {
     public class EnergiaTileEffect : MonoBehaviour
     {
@@ -37,6 +37,14 @@ namespace Celeris.Core
                 _nucleoMat = nucleoRenderer.material;
                 _baseEmissionColor = _nucleoMat.GetColor(EmissionColor);
             }
+        }
+
+        private void OnDisable()
+        {
+            // Detener PulseLoop al desactivarse para evitar corrutinas zombie.
+            // StopEffect() no se llama aqui porque puede no estar en estado draining.
+            StopAllCoroutines();
+            _pulseCoroutine = null;
         }
 
         private void Start()

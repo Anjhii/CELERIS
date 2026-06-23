@@ -1,236 +1,205 @@
+// ============================================================
+// ScoreManager.cs  |  Assets/Scripts/Leaderboard/  — v2 SOLID
+//
+// CAMBIOS v2 (Bloque 5):
+//   Toda lectura/escritura de PlayerPrefs eliminada de este archivo.
+//   Reemplazada por IPlayerProgressStore (inyectado en Awake via
+//   PlayerProgressStore.EnsureExists()).
+//   Las constantes KEY_* eliminadas — son responsabilidad del store.
+//
+// RESPONSABILIDAD:
+//   Gestionar el score de la sesion actual (_currentScore) y delegar
+//   persistencia al store. Sincronizar con Supabase cuando hay red.
+// ============================================================
 using System;
-using Celeris.Data;   // LevelResult
+using Celeris.Core;
+using Celeris.Data;
 using UnityEngine;
 
-/// <summary>
-/// ScoreManager — Puntaje LOCAL + progreso de CELERIS.
-/// Persiste con PlayerPrefs. Sincroniza con SupabaseManager cuando hay red.
-/// </summary>
-public class ScoreManager : MonoBehaviour
+namespace Celeris.Leaderboard
 {
-    // ─── Singleton ──────────────────────────────────────────────────────────────
-    public static ScoreManager Instance { get; private set; }
-
-    // ─── Eventos ────────────────────────────────────────────────────────────────
-    public event Action<long> OnScoreChanged;
-    public event Action<long> OnNewHighScore;
-
-    // ─── Claves PlayerPrefs (score y sesión — sin cambios) ───────────────────────
-    private const string KEY_HIGH_SCORE    = "LocalHighScore";
-    private const string KEY_NEEDS_SYNC    = "ScoreNeedsSync";
-    private const string KEY_PENDING_SCORE = "PendingScore";
-    private const string KEY_DEVICE_ID     = "DeviceID";
-    private const string KEY_USERNAME      = "Username";
-
-    // ─── Claves PlayerPrefs (progreso CELERIS — nuevas) ─────────────────────────
-    private const string KEY_MAX_LEVEL     = "MaxUnlockedLevel";
-    private const string KEY_LEVELS_DONE   = "LevelsCompleted";
-    private const string KEY_TIMES_PLAYED  = "TimesPlayed";
-    private const string KEY_TOTAL_STARS   = "TotalStars";
-    // bestScore por nivel: "LevelBestScore_N"
-    // estrellas por nivel: "LevelStars_N"
-
-    // ─── Estado de sesión ────────────────────────────────────────────────────────
-    private long _currentScore = 0;
-
-    // ─── Propiedades — score global (sin cambios) ────────────────────────────────
-    public long   CurrentScore   => _currentScore;
-    public long   LocalHighScore => PlayerPrefs.GetInt(KEY_HIGH_SCORE, 0);
-    public string DeviceId       => PlayerPrefs.GetString(KEY_DEVICE_ID, "");
-    public bool   HasPendingSync => PlayerPrefs.GetInt(KEY_NEEDS_SYNC, 0) == 1;
-    public long   PendingScore   => PlayerPrefs.GetInt(KEY_PENDING_SCORE, 0);
-
-    public string Username
+    public class ScoreManager : MonoBehaviour
     {
-        get => PlayerPrefs.GetString(KEY_USERNAME, "Jugador");
-        set { PlayerPrefs.SetString(KEY_USERNAME, value); PlayerPrefs.Save(); }
-    }
+        // ── Singleton ─────────────────────────────────────────
+        public static ScoreManager Instance { get; private set; }
 
-    // ─── Propiedades — progreso CELERIS (nuevas) ────────────────────────────────
-    public int MaxUnlockedLevel => PlayerPrefs.GetInt(KEY_MAX_LEVEL,    0);
-    public int LevelsCompleted  => PlayerPrefs.GetInt(KEY_LEVELS_DONE,  0);
-    public int TimesPlayed      => PlayerPrefs.GetInt(KEY_TIMES_PLAYED, 0);
-    public int TotalStars       => PlayerPrefs.GetInt(KEY_TOTAL_STARS,  0);
+        // ── Eventos ───────────────────────────────────────────
+        public event Action<long> OnScoreChanged;
+        public event Action<long> OnNewHighScore;
 
-    /// <summary>Mejor puntaje conseguido en un nivel concreto (índice 0-based).</summary>
-    public int GetBestScoreForLevel(int levelIndex) =>
-        PlayerPrefs.GetInt($"LevelBestScore_{levelIndex}", 0);
+        // ── Dependencia inyectada (DIP) ───────────────────────
+        private IPlayerProgressStore _store;
 
-    /// <summary>Estrellas obtenidas en un nivel concreto (0-3).</summary>
-    public int GetStarsForLevel(int levelIndex) =>
-        PlayerPrefs.GetInt($"LevelStars_{levelIndex}", 0);
+        // ── Estado de sesion (en memoria, no persiste) ────────
+        private long _currentScore = 0;
 
-    /// <summary>
-    /// Suma los mejores puntajes de todos los niveles completados.
-    /// Este es el valor que se envía al leaderboard global.
-    /// </summary>
-    public long GetTotalCumulativeScore()
-    {
-        long total = 0;
-        // Iterar hasta MaxUnlockedLevel en lugar de detenerse al primer índice sin clave,
-        // evita que niveles saltados o con score 0 corten la suma prematuramente.
-        for (int i = 0; i <= MaxUnlockedLevel; i++)
-            total += PlayerPrefs.GetInt($"LevelBestScore_{i}", 0);
-        return total;
-    }
+        // ── Propiedades ───────────────────────────────────────
+        public long   CurrentScore   => _currentScore;
+        public long   LocalHighScore => _store.HighScore;
+        public string DeviceId       => _store.DeviceId;
+        public bool   HasPendingSync => _store.NeedsSync;
+        public long   PendingScore   => _store.PendingScore;
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    private void Awake()
-    {
-        if (Instance != null && Instance != this) { Destroy(gameObject); return; }
-        Instance = this;
-        DontDestroyOnLoad(gameObject);
-        EnsureDeviceId();
-    }
-
-    private void EnsureDeviceId()
-    {
-        if (string.IsNullOrEmpty(PlayerPrefs.GetString(KEY_DEVICE_ID, "")))
+        public string Username
         {
-            PlayerPrefs.SetString(KEY_DEVICE_ID, Guid.NewGuid().ToString());
-            PlayerPrefs.Save();
+            get => _store.Username;
+            set { _store.Username = value; _store.ForceFlush(); }
         }
-    }
 
-    // ─── API original (sin cambios) ──────────────────────────────────────────────
+        public int MaxUnlockedLevel => _store.MaxUnlockedLevel;
+        public int LevelsCompleted  => _store.LevelsCompleted;
+        public int TimesPlayed      => _store.TimesPlayed;
+        public int TotalStars       => _store.TotalStars;
 
-    public void ResetCurrentScore()
-    {
-        _currentScore = 0;
-        OnScoreChanged?.Invoke(_currentScore);
-    }
+        public int GetBestScoreForLevel(int levelIndex) =>
+            _store.GetBestScoreForLevel(levelIndex);
 
-    public void AddPoints(long points)
-    {
-        if (points <= 0) return;
-        _currentScore += points;
-        OnScoreChanged?.Invoke(_currentScore);
-        EvaluateHighScore(_currentScore);
-    }
+        public int GetStarsForLevel(int levelIndex) =>
+            _store.GetStarsForLevel(levelIndex);
 
-    /// <summary>Envía el high score global al leaderboard. Sigue funcionando igual.</summary>
-    public void SubmitLevelScore(long finalScore)
-    {
-        _currentScore = finalScore;
-        EvaluateHighScore(finalScore);
-
-        if (SupabaseManager.Instance != null)
-            SupabaseManager.Instance.SubmitScore(LocalHighScore, Username);  // GetUserId() usa Auth UUID si está logueado
-        else
-            MarkScoreAsPending(LocalHighScore);
-    }
-
-    public void MarkScoreAsPending(long score)
-    {
-        PlayerPrefs.SetInt(KEY_NEEDS_SYNC, 1);
-        PlayerPrefs.SetInt(KEY_PENDING_SCORE, (int)score);
-        PlayerPrefs.Save();
-    }
-
-    public void ClearPendingSync()
-    {
-        PlayerPrefs.SetInt(KEY_NEEDS_SYNC, 0);
-        PlayerPrefs.Save();
-    }
-
-    // ─── API CELERIS — método principal post-nivel (nueva) ──────────────────────
-
-    /// <summary>
-    /// Registra el resultado completo de un nivel:
-    /// actualiza score global, progreso por nivel y sincroniza con Supabase.
-    /// Llamar desde GameplayScene al terminar cada nivel (victoria o derrota).
-    /// </summary>
-    public void RecordLevelResult(LevelResult result)
-    {
-        _currentScore = result.score;
-        OnScoreChanged?.Invoke(_currentScore);
-
-        // Siempre incrementar partidas jugadas
-        PlayerPrefs.SetInt(KEY_TIMES_PLAYED, TimesPlayed + 1);
-
-        if (result.isVictory)
+        public long GetTotalCumulativeScore()
         {
-            // ── Mejor score de este nivel ─────────────────────────────────────
-            int prevBest = GetBestScoreForLevel(result.levelIndex);
-            if (result.score > prevBest)
-                PlayerPrefs.SetInt($"LevelBestScore_{result.levelIndex}", result.score);
+            long total = 0;
+            for (int i = 0; i <= _store.MaxUnlockedLevel; i++)
+                total += _store.GetBestScoreForLevel(i);
+            return total;
+        }
 
-            // ── Estrellas de este nivel (solo sube, nunca baja) ───────────────
-            int prevStars = GetStarsForLevel(result.levelIndex);
-            if (result.stars > prevStars)
+        // ── Lifecycle ─────────────────────────────────────────
+        private void Awake()
+        {
+            if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+
+            _store = PlayerProgressStore.EnsureExists();
+            EnsureDeviceId();
+        }
+
+        private void EnsureDeviceId()
+        {
+            if (string.IsNullOrEmpty(_store.DeviceId))
             {
-                int starDelta = result.stars - prevStars;
-                PlayerPrefs.SetInt($"LevelStars_{result.levelIndex}", result.stars);
-                PlayerPrefs.SetInt(KEY_TOTAL_STARS, TotalStars + starDelta);
+                _store.DeviceId = Guid.NewGuid().ToString();
+                _store.ForceFlush();
+            }
+        }
+
+        // ── API de score de sesion ────────────────────────────
+
+        public void ResetCurrentScore()
+        {
+            _currentScore = 0;
+            OnScoreChanged?.Invoke(_currentScore);
+        }
+
+        public void AddPoints(long points)
+        {
+            if (points <= 0) return;
+            _currentScore += points;
+            OnScoreChanged?.Invoke(_currentScore);
+            EvaluateHighScore(_currentScore);
+        }
+
+        public void SubmitLevelScore(long finalScore)
+        {
+            _currentScore = finalScore;
+            EvaluateHighScore(finalScore);
+
+            if (SupabaseManager.Instance != null)
+                SupabaseManager.Instance.SubmitScore(LocalHighScore, Username);
+            else
+                MarkScoreAsPending(LocalHighScore);
+        }
+
+        public void MarkScoreAsPending(long score)
+        {
+            _store.NeedsSync    = true;
+            _store.PendingScore = score;
+            // No ForceFlush aqui — se persistira en OnApplicationPause/Quit via store.
+        }
+
+        public void ClearPendingSync()
+        {
+            _store.NeedsSync = false;
+            // Sin ForceFlush — el store lo persiste en pause/quit.
+        }
+
+        // ── API de resultado de nivel ─────────────────────────
+
+        public void RecordLevelResult(LevelResult result)
+        {
+            _currentScore = result.score;
+            OnScoreChanged?.Invoke(_currentScore);
+
+            _store.TimesPlayed = _store.TimesPlayed + 1;
+
+            if (result.isVictory)
+            {
+                int prevBest = _store.GetBestScoreForLevel(result.levelIndex);
+                if (result.score > prevBest)
+                    _store.SetBestScoreForLevel(result.levelIndex, result.score);
+
+                int prevStars = _store.GetStarsForLevel(result.levelIndex);
+                if (result.stars > prevStars)
+                {
+                    int starDelta = result.stars - prevStars;
+                    _store.SetStarsForLevel(result.levelIndex, result.stars);
+                    _store.TotalStars = _store.TotalStars + starDelta;
+                }
+
+                // F1-T2: Idempotencia — LevelsCompleted solo crece si este nivel
+                // no había sido completado antes (best score previo == 0).
+                // Criterio SST: la fuente de verdad de "nivel completado" es el
+                // best score guardado, no un contador de intentos.
+                if (prevBest == 0)
+                    _store.LevelsCompleted = _store.LevelsCompleted + 1;
+
+                int nextLevel = result.levelIndex + 1;
+                if (nextLevel > _store.MaxUnlockedLevel)
+                    _store.MaxUnlockedLevel = nextLevel;
             }
 
-            // ── Niveles completados ───────────────────────────────────────────
-            PlayerPrefs.SetInt(KEY_LEVELS_DONE, LevelsCompleted + 1);
+            // Persistencia diferida — el store la ejecutara en pause/quit.
+            // No llamar ForceFlush aqui para no generar I/O en el hot-path.
 
-            // ── Desbloqueo del siguiente nivel ────────────────────────────────
-            int nextLevel = result.levelIndex + 1;
-            if (nextLevel > MaxUnlockedLevel)
-                PlayerPrefs.SetInt(KEY_MAX_LEVEL, nextLevel);
+            long cumulativeScore = GetTotalCumulativeScore();
+            EvaluateHighScore(cumulativeScore);
+
+            if (SupabaseManager.Instance != null)
+            {
+                SupabaseManager.Instance.SubmitScore(LocalHighScore, Username);
+                SupabaseManager.Instance.SyncPlayerProgress();
+            }
+            else
+            {
+                MarkScoreAsPending(LocalHighScore);
+            }
         }
 
-        PlayerPrefs.Save();
-
-        // ── Score global acumulado (suma de mejores puntajes de todos los niveles) ─
-        // El leaderboard muestra el total acumulado, no el score de un único nivel.
-        long cumulativeScore = GetTotalCumulativeScore();
-        EvaluateHighScore(cumulativeScore);
-
-        // ── Sincronizar todo con Supabase ─────────────────────────────────────
-        if (SupabaseManager.Instance != null)
+        // ── Privados ──────────────────────────────────────────
+        private void EvaluateHighScore(long score)
         {
-            SupabaseManager.Instance.SubmitScore(LocalHighScore, Username);  // GetUserId() usa Auth UUID si está logueado
-            SupabaseManager.Instance.SyncPlayerProgress();
-        }
-        else
-        {
-            MarkScoreAsPending(LocalHighScore);
-        }
-    }
+            if (score <= _store.HighScore) return;
 
-    // ─── Privados ────────────────────────────────────────────────────────────────
-    private void EvaluateHighScore(long score)
-    {
-        long stored = PlayerPrefs.GetInt(KEY_HIGH_SCORE, 0);
-        if (score > stored)
-        {
-            PlayerPrefs.SetInt(KEY_HIGH_SCORE, (int)score);
-            PlayerPrefs.SetInt(KEY_NEEDS_SYNC, 1);
-            PlayerPrefs.SetInt(KEY_PENDING_SCORE, (int)score);
-            // NOTA: PlayerPrefs.Save() removido del hot-path.
-            // Se persiste en OnApplicationPause / OnApplicationQuit.
+            _store.HighScore    = score;
+            _store.NeedsSync    = true;
+            _store.PendingScore = score;
+            // Persistencia diferida — sin Save() en hot-path.
             OnNewHighScore?.Invoke(score);
         }
-    }
 
-    // ─── Persistencia segura (solo al minimizar o cerrar) ────────────────────────
-    // Elimina los tirones de disco durante el gameplay/minijuego.
+        // ── Persistencia delegada al store ────────────────────
+        // ScoreManager ya no llama PlayerPrefs.Save() directamente.
+        // PlayerProgressStore captura OnApplicationPause/Quit y llama
+        // FlushIfDirty(). Estos metodos existen solo como fallback
+        // para componentes externos que los llamen explicitamente.
 
-    private void OnApplicationPause(bool isPaused)
-    {
-        if (isPaused) PlayerPrefs.Save();
-    }
+        private void OnApplicationPause(bool isPaused)
+        {
+            if (isPaused) _store?.FlushIfDirty();
+        }
 
-    private void OnApplicationQuit()
-    {
-        PlayerPrefs.Save();
+        private void OnApplicationQuit() => _store?.FlushIfDirty();
     }
 }
-
-
-
-// B. Race Conditions (Condiciones de Carrera) en Singletons
-// Archivos a editar: Entorno de Unity (Editor) y opcionalmente ScoreManager.cs
-
-// Acción 1 (Recomendada - Editor): Ve a Edit > Project Settings > Script Execution Order. Añade los scripts AuthManager y SupabaseManager y asígnales un valor negativo (ej. -100) para que se ejecuten antes del Default Time. Asegúrate de que ScoreManager mantenga su tiempo por defecto o uno positivo para que siempre despierte después de la capa de red.
-
-// Acción 2 (Arquitectura en Código): En ScoreManager.cs, si tienes lógica de sincronización en el Start() o en las primeras validaciones, asegúrate de envolverlas en una comprobación segura (if (SupabaseManager.Instance != null)). Para mayor robustez a futuro, puedes crear un evento OnNetworkReady en el SupabaseManager al que el ScoreManager se suscriba antes de enviar datos.
-
-
-// Acción: Localiza el método EvaluateHighScore(...) y busca la línea donde llamas a PlayerPrefs.Save(). Bórrala de ese flujo de ejecución constante.
-
-// Lógica: Agrega los métodos OnApplicationPause(bool isPaused) y OnApplicationQuit() en este mismo script. Traslada la llamada de PlayerPrefs.Save() dentro de estos métodos. De esta forma, el motor guardará los datos acumulados en la RAM física hacia el disco de almacenamiento únicamente cuando el jugador minimice la aplicación o la cierre, eliminando los tirones durante el minijuego.

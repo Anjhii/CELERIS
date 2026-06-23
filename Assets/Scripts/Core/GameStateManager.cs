@@ -2,20 +2,12 @@
 // GameStateManager.cs  |  Assets/Scripts/Core/
 //
 // Singleton DontDestroyOnLoad que gestiona:
-//   A) Estado de pausa global (pausa el juego sin contaminar
-//      a DroideController ni al generador).
-//   B) Estado de retorno de Portal: guarda la coordenada y
-//      dirección del Droide cuando entró al Portal, para que
-//      GameFlowManager lo restaure al volver del minijuego.
+//   A) Estado de pausa global.
+//   B) Estado de retorno de Portal.
+//   C) Contador de terminales hackeadas en la run actual
+//      (reemplaza TerminalHackManager.HackedTerminalsCount static).
 //
-// SETUP: Añadir a LoginScene junto a LevelManager.
-//
-// USO TÍPICO:
-//   GameStateManager.IsPaused           → bool (chequear en Update)
-//   GameStateManager.Instance.Pause()   → pausa
-//   GameStateManager.Instance.Resume()  → reanuda
-//   GameStateManager.Instance.SetPortalReturn(coord, dir)
-//   GameStateManager.Instance.ConsumePortalReturn(out coord, out dir) → bool
+// MIGRACION Fase 2: Vector2Int -> Vector3Int.
 // ============================================================
 using UnityEngine;
 
@@ -23,19 +15,29 @@ namespace Celeris.Core
 {
     public class GameStateManager : MonoBehaviour
     {
-        // ── Singleton ─────────────────────────────────────────
+        // -- Singleton ----------------------------------------
         public static GameStateManager Instance { get; private set; }
 
-        // ── Estado global ─────────────────────────────────────
+        // -- Estado global ------------------------------------
         public static bool IsPaused { get; private set; } = false;
 
-        // ── Estado de retorno de Portal ───────────────────────
-        private bool              _hasPortalReturn = false;
-        private Vector2Int        _portalReturnCoord;
-        private Vector2Int        _portalReturnDirection;
-        private Vector2Int        _portalTileCoord;   // para marcar el tile completado
+        // -- Estado de retorno de Portal ----------------------
+        private bool       _hasPortalReturn = false;
+        private Vector3Int _portalReturnCoord;
+        private Vector3Int _portalReturnDirection;
+        private Vector3Int _portalTileCoord;
 
-        // ── Lifecycle ─────────────────────────────────────────
+        // -- Terminales hackeadas en esta run -----------------
+        // Reemplaza TerminalHackManager.HackedTerminalsCount (static eliminado).
+        public int TerminalsHackedThisRun { get; private set; } = 0;
+
+        /// <summary>
+        /// Terminales requeridas para desbloquear la meta de victoria.
+        /// Reemplaza TerminalHackManager.RequiredHacks (const eliminada).
+        /// </summary>
+        public const int RequiredTerminalHacks = 3;
+
+        // -- Lifecycle ----------------------------------------
         private void Awake()
         {
             if (Instance != null && Instance != this)
@@ -48,29 +50,23 @@ namespace Celeris.Core
             IsPaused = false;
         }
 
-        // ── API de pausa ──────────────────────────────────────
+        // -- API de pausa -------------------------------------
 
-        /// <summary>Pausa el movimiento del Droide y el estado del juego.</summary>
         public void Pause()
         {
             IsPaused = true;
             Debug.Log("[GameStateManager] Juego pausado.");
         }
 
-        /// <summary>Reanuda el juego.</summary>
         public void Resume()
         {
             IsPaused = false;
             Debug.Log("[GameStateManager] Juego reanudado.");
         }
 
-        // ── API de Portal ─────────────────────────────────────
+        // -- API de Portal ------------------------------------
 
-        /// <summary>
-        /// Guarda la información de retorno antes de cargar el minijuego.
-        /// GameFlowManager llama esto cuando el Droide entra a un Portal.
-        /// </summary>
-        public void SetPortalReturn(Vector2Int droideCoord, Vector2Int droideDirection, Vector2Int portalTileCoord)
+        public void SetPortalReturn(Vector3Int droideCoord, Vector3Int droideDirection, Vector3Int portalTileCoord)
         {
             _portalReturnCoord     = droideCoord;
             _portalReturnDirection = droideDirection;
@@ -79,14 +75,10 @@ namespace Celeris.Core
             Debug.Log($"[GameStateManager] Portal guardado en coord={droideCoord}, dir={droideDirection}.");
         }
 
-        /// <summary>
-        /// Lee y limpia el estado de retorno de Portal.
-        /// Devuelve true si había un retorno pendiente.
-        /// </summary>
         public bool ConsumePortalReturn(
-            out Vector2Int droideCoord,
-            out Vector2Int droideDirection,
-            out Vector2Int portalTileCoord)
+            out Vector3Int droideCoord,
+            out Vector3Int droideDirection,
+            out Vector3Int portalTileCoord)
         {
             droideCoord     = _portalReturnCoord;
             droideDirection = _portalReturnDirection;
@@ -100,5 +92,24 @@ namespace Celeris.Core
         }
 
         public bool HasPortalReturn => _hasPortalReturn;
+
+        // -- API de Terminales Hackeadas ----------------------
+
+        /// <summary>Llamado por TerminalHackManager al completar un hack exitoso.</summary>
+        public void IncrementTerminalsHacked()
+        {
+            TerminalsHackedThisRun++;
+            Debug.Log($"[GameStateManager] Terminales hackeadas: {TerminalsHackedThisRun}.");
+        }
+
+        /// <summary>
+        /// Llamado al comenzar un nivel nuevo.
+        /// Reemplaza TerminalHackManager.ResetHackedCount().
+        /// </summary>
+        public void ResetTerminalsHacked()
+        {
+            TerminalsHackedThisRun = 0;
+            Debug.Log("[GameStateManager] Contador de terminales reiniciado.");
+        }
     }
 }

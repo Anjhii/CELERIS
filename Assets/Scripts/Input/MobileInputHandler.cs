@@ -36,11 +36,10 @@ namespace Celeris.Input
     {
         // ── Inspector ─────────────────────────────────────────
         [Header("Droide")]
-        public DroideController droide;
+        public DroideCore droide;
 
-        [Header("Pulso Eléctrico")]
-        [Tooltip("Cooldown en segundos entre pulsos eléctricos")]
-        public float pulseCooldown = 3.0f;
+        // F2-T2: pulseCooldown eliminado de aquí. El cooldown canónico vive en DroideCore.pulseCooldown.
+        // SRP: MobileInputHandler solo gesiona input, DroideCore decide cuándo puede dispararse.
 
         [Header("Feedback visual (opcional)")]
         public Image pulseButtonImage;
@@ -50,7 +49,8 @@ namespace Celeris.Input
         // ── Privado ───────────────────────────────────────────
         private float _pressDownTime = 0f;
         private bool  _isPressed     = false;
-        private float _lastPulseTime = -999f;
+        // F2-T2: _lastPulseTime eliminado. El cooldown vive en DroideCore.TryFireElectricPulse().
+        // SRP: MobileInputHandler dispara, DroideCore decide si puede dispararse.
 
         // ── Lifecycle ─────────────────────────────────────────
         private void OnEnable()
@@ -129,22 +129,20 @@ namespace Celeris.Input
         }
 
         // ── Pulso eléctrico ───────────────────────────────────
+        // F2-T2: Toda la lógica de cooldown y condiciones movida a DroideCore.TryFireElectricPulse().
+        // SRP: este método solo delega. DRY: un único _lastPulseTime en DroideCore.
         private void TryFireElectricPulse()
         {
-            if (droide == null) return;
-            if (Time.unscaledTime - _lastPulseTime < pulseCooldown) return;
-            if (!droide.HasLaserAtRangeOne()) return;
-
-            _lastPulseTime = Time.unscaledTime;
-            droide.TriggerElectricPulse();
+            droide?.TryFireElectricPulse();
         }
 
         // ── Feedback visual ───────────────────────────────────
+        // F2-T2: Usa droide.IsElectricPulseReady en lugar de calcular el cooldown localmente.
         private void UpdatePulseVisual()
         {
             if (pulseButtonImage == null) return;
-            bool onCooldown = (Time.unscaledTime - _lastPulseTime) < pulseCooldown;
-            pulseButtonImage.color = onCooldown ? colorPulseCooldown : colorPulseReady;
+            bool ready = droide != null && droide.IsElectricPulseReady;
+            pulseButtonImage.color = ready ? colorPulseReady : colorPulseCooldown;
         }
     }
 }

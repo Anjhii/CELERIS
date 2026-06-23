@@ -77,6 +77,11 @@ namespace Celeris.Config
         [Header("Escalado automático de dificultad")]
         public bool autoScaleDifficulty = true;
 
+        [Tooltip("Constante de suavidad de la curva sigmoide. " +
+                 "A n=k el parámetro alcanza ~63% del máximo. " +
+                 "A n=3k alcanza ~95%. Valor recomendado: 15.")]
+        [Range(5f, 40f)] public float difficultyK = 15f;
+
         // ─────────────────────────────────────────────────────
 
         /// <summary>
@@ -86,22 +91,54 @@ namespace Celeris.Config
         public int GetTotalTiles(int extraSegments = 0) =>
             baseMapLength + levelIndex * lengthGrowthPerLevel + extraSegments + 2;
 
-        /// <summary>Devuelve los parámetros efectivos escalados por levelIndex.</summary>
-        public RuntimeDifficulty GetScaledDifficulty(int totalLevels = 9)
+        /// <summary>
+        /// Devuelve los parámetros efectivos escalados por levelIndex.
+        ///
+        /// MODELO: función sigmoide f(n) = max * (1 - e^(-n/k))
+        ///   • n = levelIndex (sin techo de niveles)
+        ///   • k = difficultyK (15 por defecto)
+        ///   • A n=k  → ~63% del máximo
+        ///   • A n=3k → ~95% del máximo
+        ///   • Asíntota finita: la dificultad nunca supera el valor máximo
+        ///     configurado, el juego nunca cruza el umbral de imposibilidad.
+        ///
+        /// DIFERENCIA CON v5 (Lerp lineal con totalLevels=9):
+        ///   La versión anterior bloqueaba la dificultad en su máximo desde el
+        ///   nivel 9. Este modelo crece indefinidamente pero con velocidad
+        ///   decreciente — adecuado para niveles infinitos.
+        /// </summary>
+        public RuntimeDifficulty GetScaledDifficulty()
         {
-            float t = autoScaleDifficulty
-                ? Mathf.Clamp01((float)levelIndex / Mathf.Max(totalLevels - 1, 1))
+            float s = autoScaleDifficulty
+                ? SigmoidT(levelIndex, difficultyK)
                 : 0f;
 
             return new RuntimeDifficulty
             {
                 Seed                   = ComputeSeed(levelIndex, proceduralSeed),
-                LaserWeightMultiplier  = Mathf.Lerp(1f,    3.5f,  t),
-                ChargeWeightMultiplier = Mathf.Lerp(1f,    0.20f, t),
-                LaserActiveDuration    = Mathf.Lerp(laserActiveDuration,   laserActiveDuration   * 0.28f, t),
-                LaserInactiveDuration  = Mathf.Lerp(laserInactiveDuration, laserInactiveDuration * 0.32f, t),
-                ExtraSegments          = Mathf.RoundToInt(Mathf.Lerp(0f, 8f, t))
+                // Laser se vuelve más frecuente con el nivel (1.0 → 3.5)
+                LaserWeightMultiplier  = 1f + 2.5f * s,
+                // Charge se vuelve menos frecuente con el nivel (1.0 → 0.2)
+                ChargeWeightMultiplier = 1f - 0.8f * s,
+                // Laser activo se acorta (más difícil de esquivar)
+                LaserActiveDuration    = laserActiveDuration    * (1f - 0.72f * s),
+                // Laser inactivo se acorta (menos tiempo de respiro)
+                LaserInactiveDuration  = laserInactiveDuration  * (1f - 0.68f * s),
+                // Segmentos extra (0 → 8)
+                ExtraSegments          = Mathf.RoundToInt(8f * s)
             };
+        }
+
+        /// <summary>
+        /// Curva sigmoide normalizada [0, 1).
+        /// f(n, k) = 1 - e^(-n/k)
+        /// Nunca llega exactamente a 1 — la dificultad tiene asíntota pero no techo absoluto.
+        /// </summary>
+        private static float SigmoidT(int n, float k)
+        {
+            if (!Mathf.Approximately(k, 0f))
+                return 1f - Mathf.Exp(-n / k);
+            return n > 0 ? 1f : 0f;
         }
 
         /// <summary>Semilla determinista por nivel (si overrideSeed == 0).</summary>
@@ -116,29 +153,8 @@ namespace Celeris.Config
             }
         }
 
-        /// <summary>
-        /// Tipo de segmento ponderado para la máquina de estados del generador.
-        /// Solo devuelve Laser o Charge (nunca Arrow/Base — eso lo decide GenState).
-        /// </summary>
-        public SegmentType GetWeightedDangerSegment(System.Random rng, RuntimeDifficulty diff)
-        {
-            int wLaser  = Mathf.Max(1, Mathf.RoundToInt(weightLaser  * diff.LaserWeightMultiplier));
-            int wCharge = Mathf.Max(1, Mathf.RoundToInt(weightCharge * diff.ChargeWeightMultiplier));
-            int total   = wLaser + wCharge;
-            return rng.Next(total) < wLaser ? SegmentType.Laser : SegmentType.Charge;
-        }
-
-        /// <summary>Legado: selector de segmento con peso base incluido.</summary>
-        public SegmentType GetWeightedRandomSegment(System.Random rng, RuntimeDifficulty diff)
-        {
-            int wLaser  = Mathf.Max(1, Mathf.RoundToInt(weightLaser  * diff.LaserWeightMultiplier));
-            int wCharge = Mathf.Max(0, Mathf.RoundToInt(weightCharge * diff.ChargeWeightMultiplier));
-            int total   = weightBase + wLaser + wCharge;
-
-            int roll = rng.Next(total);
-            if (roll < weightBase)             return SegmentType.Arrow;
-            if (roll < weightBase + wLaser)    return SegmentType.Laser;
-            return SegmentType.Charge;
-        }
+        // F3-T2 (Junio 2026): GetWeightedDangerSegment() y GetWeightedRandomSegment()
+        // eliminados. Eran dead code del sistema de generación anterior.
+        // El sistema activo usa PathSequencer + IObstacleDefinition[] (ver ProceduralGridGenerator).
     }
 }

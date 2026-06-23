@@ -18,7 +18,7 @@ namespace Celeris.UI
     public class BatteryUI : MonoBehaviour
     {
         [Header("Referencias")]
-        public DroideController droide;
+        public DroideCore droide;
         public Slider           slider;
         [Tooltip("Slider > Fill Area > Fill (Image)")]
         public Image            fillImage;

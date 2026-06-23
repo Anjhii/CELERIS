@@ -3,7 +3,7 @@ using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 
-namespace Celeris.Core
+namespace Celeris.Escenario
 {
     public class BackgroundDecorationSpawner : MonoBehaviour
     {
@@ -53,17 +53,25 @@ namespace Celeris.Core
 
         private void OnGridStarted()
         {
+            // Solo inicializamos el RNG aqui para que use el seed del config
+            // antes de que el grid cambie de estado.
             int seed = gridGenerator.config != null ? gridGenerator.config.proceduralSeed : 0;
             _rng = new System.Random(seed != 0 ? seed + 99 : System.Environment.TickCount);
+        }
 
+        private void OnGridReady()
+        {
+            // TileMap esta completamente poblado aqui. Leer bounds y conteo
+            // en este callback garantiza datos validos — no en OnGridStarted,
+            // donde TileMap.Count == 0.
             _totalTiles = gridGenerator.TileMap.Count;
-            float singleRiseDuration = 5f / gridGenerator.waveSpeed;
+            float singleRiseDuration = gridGenerator.waveSpeed > 0f
+                ? 5f / gridGenerator.waveSpeed
+                : 1f;
             _gridTotalDuration = (_totalTiles * gridGenerator.tileDelay) + singleRiseDuration;
 
             StartCoroutine(SpawnAndRise(_gridTotalDuration));
         }
-
-        private void OnGridReady() { }
 
         private IEnumerator SpawnAndRise(float totalDuration)
         {
@@ -147,12 +155,14 @@ namespace Celeris.Core
             minX = float.MaxValue; maxX = float.MinValue;
             minZ = float.MaxValue; maxZ = float.MinValue;
 
+            // MIGRACIÓN Fase 2: TileMap ahora es Dictionary<Vector3Int, TileComponent>.
+            // El eje Z del grid es kvp.Key.z (antes era kvp.Key.y con Vector2Int).
             foreach (var kvp in gridGenerator.TileMap)
             {
                 if (kvp.Key.x < minX) minX = kvp.Key.x;
                 if (kvp.Key.x > maxX) maxX = kvp.Key.x;
-                if (kvp.Key.y < minZ) minZ = kvp.Key.y;
-                if (kvp.Key.y > maxZ) maxZ = kvp.Key.y;
+                if (kvp.Key.z < minZ) minZ = kvp.Key.z;
+                if (kvp.Key.z > maxZ) maxZ = kvp.Key.z;
             }
 
             if (minX == float.MaxValue) { minX = 0; maxX = 0; minZ = 0; maxZ = 0; }
@@ -167,7 +177,7 @@ namespace Celeris.Core
 
             var renderers = instance.GetComponentsInChildren<Renderer>();
             foreach (var r in renderers)
-                r.material = mat;
+                r.sharedMaterial = mat;
         }
 
         private List<GameObject> BuildPrefabList()

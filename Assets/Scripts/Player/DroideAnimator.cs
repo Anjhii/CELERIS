@@ -27,11 +27,12 @@ using Celeris.Data;
 
 namespace Celeris.Player
 {
-    public class DroideAnimator : MonoBehaviour
+    public class DroideAnimator : MonoBehaviour, IDroideAnimator
     {
         [Header("Referencias")]
-        public DroideController droide;
-        public Animator         animator;
+        [Tooltip("Reemplaza DroideController — asignar DroideCore del mismo prefab")]
+        public DroideCore droide;
+        public Animator   animator;
 
         [Header("Idle Variants")]
         [Range(0f, 1f)]
@@ -52,12 +53,14 @@ namespace Celeris.Player
         // ─────────────────────────────────────────────────────
         private void OnEnable()
         {
-            if (droide != null) droide.OnStateChanged += HandleStateChanged;
+            if (droide == null) return;
+            droide.OnStateChanged += HandleStateChanged;
         }
 
         private void OnDisable()
         {
-            if (droide != null) droide.OnStateChanged -= HandleStateChanged;
+            if (droide == null) return;
+            droide.OnStateChanged -= HandleStateChanged;
         }
 
         private void HandleStateChanged(DroideState state)
@@ -105,11 +108,8 @@ namespace Celeris.Player
                     animator.SetBool(P_READY, true);
                     break;
 
-                // ── Feedback post-ExitPortal ──────────────────
-                case DroideState.ReadyToAdvance:
-                    animator.SetBool(P_MOVING, false);
-                    animator.SetBool(P_READY,  true);
-                    break;
+                // F3-T3: case ReadyToAdvance eliminado — estado removido del enum.
+                // DroideCore nunca lo emitía; era dead code desde la migración.
 
                 // ── Victoria ──────────────────────────────────
                 case DroideState.Victory:
