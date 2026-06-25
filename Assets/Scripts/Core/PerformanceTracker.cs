@@ -135,7 +135,7 @@ namespace Celeris.Core
         //  CÁLCULO DE MÉTRICAS
         // ══════════════════════════════════════════════════════
 
-        private void RecordResult(LevelResult r)
+        private void RecordResult(LevelSnapshot r)
         {
             _results.Enqueue(r);
             if (_results.Count > WINDOW_SIZE)

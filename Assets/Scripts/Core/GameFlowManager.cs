@@ -33,7 +33,9 @@
 using Celeris.Core;
 using Celeris.Data;
 using Celeris.Grid;
+using Celeris.HackMinigame;
 using Celeris.Leaderboard;
+using Celeris.Player;
 using Celeris.UI;
 using System.Collections;
 using UnityEngine;
