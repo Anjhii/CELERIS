@@ -183,3 +183,40 @@ Interfaz de usuario.
 |---|---|
 | `CameraFollower.cs` | Sigue al Droide con suavizado (Lerp). Mantiene offset configurable. |
 | `ShockwaveEffect.cs` | Efecto de shockwave radial (escala y fade) al activar el pulso eléctrico del Droide. |
+
+
+## Funcionamiento del juego 
+
+### Generación del nivel
+ProceduralGridGenerator.Start() lanza la corrutina BuildGrid() que ejecuta 4 pasos en orden estricto:
+PASO 1 — PathSequencer construye la secuencia lógica del nivel. La estructura es siempre la misma: un BaseTile de inicio, luego 3 actos idénticos (buffer de BaseTiles → bloque de obstáculos → buffer → PortalTile), y al final buffer + GoalTile. Los obstáculos son clusters de LaserTile (1-5 consecutivos) o ChargeTile (3-7 consecutivos), elegidos aleatoriamente con pesos escalados por dificultad. La semilla es config.levelIndex — el mismo nivel siempre genera el mismo camino.
+PASO 2 — PathGeometryTracer toma esa secuencia lógica y le asigna coordenadas 3D reales en el plano XZ. Genera giros aleatorios según turnProbability respetando minStraightSteps y maxStraightSteps. El resultado es una lista de PlacedTile con coordenada Vector3Int para cada tile.
+PASO 3 — TileFactory instancia los GameObjects. Cada tile sale del prefab base, se le asigna TileType, gridCoord y arrowDirection. Los obstáculos reciben su configuración específica: los LaserTile reciben un LaserController con activeDuration e inactiveDuration escalados por dificultad, los ChargeTile reciben su componente de campo magnético, los PortalTile reciben PortalTileComponent.
+PASO 4 — TileWaveAnimator anima la aparición: todos los tiles empiezan en Y=-5 y suben a Y=0 en secuencia con un delay de tileDelay segundos entre cada uno, creando el efecto de ola. Al terminar dispara OnGridReady — esto le avisa a GameFlowManager que el juego puede comenzar.
+
+### El Droide — cómo se mueve
+El Droide no se mueve solo ni de forma continua. Solo avanza cuando el jugador toca la pantalla.
+MobileInputHandler detecta toques y llama DroideCore.OnPressStart() o OnPressEnd(). Internamente DroideCore delega en DroideStateMachine que tiene activo un IPlayerState. En condiciones normales el estado activo es NormalMovementState.
+Con cada tap, NormalMovementState consulta a DroideMovementDecider cuál es el siguiente tile: toma el GridCoord actual del Droide, aplica TileComponent.GetExitDirection() del tile actual (que puede ser la dirección natural o la de una flecha si es ArrowTile), y obtiene la coordenada del tile destino. DroideCore encola el movimiento y en FixedUpdate ejecuta Rigidbody.MovePosition() hacia la posición world del tile destino.
+Al llegar a cada tile ocurre lo siguiente según el tipo:
+
+BaseTile — nada especial, el Droide queda en idle esperando el siguiente tap.
+ArrowTile — cambia la dirección de salida del Droide para el siguiente movimiento.
+LaserTile — si el láser está activo cuando el Droide llega, LaserController.OnLaserActivated dispara y el Droide muere (DeathCause.Laser). Si está inactivo, pasa sin daño.
+ChargeTile — activa FrictionMovementState. El Droide queda atrapado: drena batería continuamente a chargeDrainRate por segundo. El jugador debe hacer taps rápidos para acumular velocidad (_speed). Cada tap suma ChargeTapImpulse a la velocidad, que decae con ChargeFrictionDecay. Cuando _speed >= ChargeEscapeSpeed el Droide se libera y vuelve a NormalMovementState. Si la batería llega a 0 antes de escapar, muere (DeathCause.Battery).
+PortalTile — DroidePortalHandler detecta la llegada y dispara OnPortalEntered. GameFlowManager recibe el evento, pausa el juego con GameStateManager.Pause() y carga la escena del minijuego de forma aditiva con MiniGameSceneService.Load().
+GoalTile — el Droide entra en estado Victory. GameFlowManager recibe DroideState.Victory y lanza VictorySequence(): registra el score en ScoreManager, espera victoryDelay segundos y llama LevelManager.AdvanceLevel() que carga el siguiente nivel.
+
+
+### El minijuego de portal
+Cuando el Droide pisa un PortalTile, la escena MiniGameScene se carga encima de la escena de juego (carga aditiva). TerminalHackManager orquesta el minijuego:
+HackSequenceController muestra una secuencia de AlienGlyph que se iluminan en orden — el jugador debe memorizarla. Al terminar la reproducción, HackInputValidator activa los glifos como botones y el jugador debe repetir la secuencia en el mismo orden. Tiene 3 intentos. Si acierta, OnTerminalExited se dispara, GameFlowManager descarga la escena del minijuego, DroidRestoreService restaura al Droide en su coordenada de grid anterior y GameStateManager.Resume() reactiva el juego. Si falla los 3 intentos, OnHackGameOver mata al Droide con ForceKill(DeathCause.Generic) y aparece el Game Over.
+
+### La batería
+El Droide empieza con 100 de batería. Solo se drena dentro de ChargeTile (a chargeDrainRate por segundo). DroideBatteryController gestiona el valor y dispara OnBatteryChanged con cada cambio. BatteryUI escucha ese evento y actualiza el slider — verde en normal, naranja si baja del 25%, rojo mientras está en ChargeTile.
+
+### Dificultad adaptativa
+Después de cada nivel, LevelManager.NotifyLevelResult() llama a DifficultyDirectorImpl.RecordLevelResult(). PerformanceTracker registra el resultado en una ventana deslizante de 5 partidas. DifficultyModel recalcula D (0 a 1) basándose en win rate, tiempo de completación y batería consumida. DifficultyActuator traduce ese D en parámetros concretos del ProceduralLevelConfig del siguiente nivel: más láseres, intervalos más cortos, menos buffers entre obstáculos.
+
+### Game Over
+Cuando el Droide muere por cualquier causa, DroideCore emite OnDied(DeathCause). GameOverTrigger escucha ese evento y activa GameOverPresenter que muestra el panel con la causa de muerte, el score acumulado y las estrellas. El jugador puede reintentar (recarga la escena con el mismo nivel) o volver al menú principal.
