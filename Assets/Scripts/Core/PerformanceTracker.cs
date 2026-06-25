@@ -38,7 +38,7 @@ namespace Celeris.Core
         private const int WINDOW_SIZE = 5;
 
         // ── Registro de resultados recientes ──────────────────
-        private readonly Queue<LevelResult> _results = new(WINDOW_SIZE + 1);
+        private readonly Queue<LevelSnapshot> _results = new(WINDOW_SIZE + 1);
 
         // ── Estado de la sesión actual ─────────────────────────
         private DroideCore _droide;
@@ -54,14 +54,16 @@ namespace Celeris.Core
         public int   ConsecutiveLosses  { get; private set; } = 0;
 
         // ── Struct interno ─────────────────────────────────────
-        private readonly struct LevelResult
+        // Renombrado de LevelResult a LevelSnapshot para evitar que sombree
+        // silenciosamente a Celeris.Data.LevelResult dentro de este scope.
+        private readonly struct LevelSnapshot
         {
             public readonly bool       Won;
             public readonly float      CompletionTime;
             public readonly float      BatteryConsumed;
             public readonly DeathCause Death;
 
-            public LevelResult(bool won, float time, float battery, DeathCause death)
+            public LevelSnapshot(bool won, float time, float battery, DeathCause death)
             {
                 Won             = won;
                 CompletionTime  = time;
@@ -121,12 +123,12 @@ namespace Celeris.Core
                 ? (_batteryAtStart - _droide.Battery) / (float)UnityEngine.Mathf.Max(1, _batteryAtStart)
                 : 1f;
 
-            RecordResult(new LevelResult(true, time, battery, DeathCause.Generic));
+            RecordResult(new LevelSnapshot(true, time, battery, DeathCause.Generic));
         }
 
         private void HandleDied(DeathCause cause)
         {
-            RecordResult(new LevelResult(false, 0f, 1f, cause));
+            RecordResult(new LevelSnapshot(false, 0f, 1f, cause));
         }
 
         // ══════════════════════════════════════════════════════
@@ -155,7 +157,7 @@ namespace Celeris.Core
             bool  countingWins = true;
 
             // Iterar de más reciente a más antiguo para racha consecutiva
-            var list = new List<LevelResult>(_results);
+            var list = new List<LevelSnapshot>(_results);
             for (int i = list.Count - 1; i >= 0; i--)
             {
                 var result = list[i];

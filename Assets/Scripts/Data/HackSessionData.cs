@@ -111,6 +111,52 @@ namespace Celeris.HackMinigame
             return Mathf.Min(length, maxSequenceLength);
         }
 
+      /// <summary>
+        /// Calcula la velocidad de visualizacion de glifos (segundos por glifo) para el tier actual.
+        ///
+        /// MODELO POR TIERS:
+        ///   speed = baseDisplaySpeed - (tier * speedReductionPerTier)
+        ///   Techo inferior en minDisplaySpeed (0.30s).
+        /// </summary>
+        public float GetProceduralDisplaySpeed()
+        {
+            float speed = baseDisplaySpeed - (CurrentTier() * speedReductionPerTier);
+            return Mathf.Max(speed, minDisplaySpeed);
+        }
+
         /// <summary>
-        /// Calcula la velocidad de visualización de glifos (segundos por gl
+        /// Calcula la recompensa en puntos por hackear la terminal con exito.
+        /// base = (globalLevel + 1) * 100
+        /// factor = (4 - currentAttempt) / 3f
+        /// </summary>
+        public int CalculateScoreReward()
+        {
+            int   baseReward    = (globalLevel + 1) * 100;
+            float attemptFactor = (4 - Mathf.Clamp(currentAttempt, 1, 3)) / 3f;
+            return Mathf.RoundToInt(baseReward * attemptFactor);
+        }
+
+        /// <summary>
+        /// Registra un intento fallido. Incrementa currentAttempt y activa
+        /// isGameOverDueToFailure cuando se supera el limite de 3 intentos.
+        /// </summary>
+        public void RegisterFailedAttempt()
+        {
+            currentAttempt++;
+            if (currentAttempt > 3)
+                isGameOverDueToFailure = true;
+        }
+
+        /// <summary>
+        /// Reinicia el estado de sesion para una nueva terminal.
+        /// </summary>
+        public void ResetForNewTerminal()
+        {
+            currentAttempt         = 1;
+            wasHackSuccessful      = false;
+            isGameOverDueToFailure = false;
+            extractedDigit         = -1;
+        }
+    }
 }
+

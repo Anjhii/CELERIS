@@ -2,16 +2,14 @@
 // IPlayerState.cs  |  Assets/Scripts/Player/
 //
 // Interfaz del patrón de estado para el movimiento del Droide.
-//
 // Estados concretos:
 //   NormalMovementState  — movimiento por mantener presionado
 //   FrictionMovementState — atrapado en ChargeTile, escape por multi-tap
-//
 // El DroideController actúa como contexto: delega cada evento
 // de input al estado activo y expone métodos internos que los
 // estados usan para manipular el Droide sin duplicar lógica.
-// ============================================================
 
+using Celeris.Player;
 namespace Celeris.Player
 {
     // ARQUITECTURA:
@@ -27,24 +25,19 @@ namespace Celeris.Player
     {
         /// <summary>Llamado al activarse este estado.</summary>
         void Enter(IDroideContext ctx);
-
         /// <summary>Llamado justo antes de cambiar a otro estado.</summary>
         void Exit(IDroideContext ctx);
-
         /// <summary>
         /// El jugador presionó la pantalla/botón.
         /// En NormalMovement inicia el movimiento continuo.
         /// En FrictionMovement cuenta como tap de impulso.
         /// </summary>
         void OnPressStart(IDroideContext ctx);
-
         /// <summary>El jugador soltó la pantalla/botón.</summary>
         void OnPressEnd(IDroideContext ctx);
-
-        /// <summary>
         /// Llamado cada frame desde DroideCore.Update()
         /// para que el estado actualice su lógica interna.
-        /// </summary>
         void Tick(IDroideContext ctx);
     }
+
 }

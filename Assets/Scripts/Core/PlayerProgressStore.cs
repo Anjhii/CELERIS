@@ -84,9 +84,9 @@ namespace Celeris.Core
 
         private void LoadAll()
         {
-            _highScore        = PlayerPrefs.GetInt(KEY_HIGH_SCORE,    0);
+            _highScore        = long.TryParse(PlayerPrefs.GetString(KEY_HIGH_SCORE,    "0"), out long hs) ? hs : 0L;
             _needsSync        = PlayerPrefs.GetInt(KEY_NEEDS_SYNC,    0) == 1;
-            _pendingScore     = PlayerPrefs.GetInt(KEY_PENDING_SCORE, 0);
+            _pendingScore     = long.TryParse(PlayerPrefs.GetString(KEY_PENDING_SCORE, "0"), out long ps) ? ps : 0L;
             _deviceId         = PlayerPrefs.GetString(KEY_DEVICE_ID,  "");
             _username         = PlayerPrefs.GetString(KEY_USERNAME,   "Jugador");
             _maxUnlockedLevel = PlayerPrefs.GetInt(KEY_MAX_LEVEL,     0);
@@ -107,7 +107,7 @@ namespace Celeris.Core
         public long HighScore
         {
             get => _highScore;
-            set { _highScore = value; PlayerPrefs.SetInt(KEY_HIGH_SCORE, (int)value); _isDirty = true; }
+            set { _highScore = value; PlayerPrefs.SetString(KEY_HIGH_SCORE, value.ToString()); _isDirty = true; }
         }
 
         public bool NeedsSync
@@ -119,7 +119,7 @@ namespace Celeris.Core
         public long PendingScore
         {
             get => _pendingScore;
-            set { _pendingScore = value; PlayerPrefs.SetInt(KEY_PENDING_SCORE, (int)value); _isDirty = true; }
+            set { _pendingScore = value; PlayerPrefs.SetString(KEY_PENDING_SCORE, value.ToString()); _isDirty = true; }
         }
 
         public string DeviceId
