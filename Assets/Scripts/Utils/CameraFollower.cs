@@ -3,7 +3,7 @@ using UnityEngine;
 namespace Celeris.Utils
 {
 
-    public class CameraFollow : MonoBehaviour
+    public class CameraFollower : MonoBehaviour
     {
         public Transform player;
         public float smoothTime = 0.1f;

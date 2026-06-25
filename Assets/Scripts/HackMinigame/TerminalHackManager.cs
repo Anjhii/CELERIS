@@ -38,6 +38,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using Celeris.Core;
+using Celeris.Leaderboard;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 

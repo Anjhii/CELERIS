@@ -36,6 +36,16 @@ CREATE POLICY "Actualizar propio perfil"
     ON profiles FOR UPDATE USING (auth.uid() = id);
 
 -- ══════════════════════════════════════════════════════════════════════════════
+--  FASE 2: Columnas de progreso en profiles
+--  Ejecutar si la tabla ya existe sin estas columnas (idempotente con IF NOT EXISTS).
+--  Requeridas por AuthManager.UpsertProfileRoutine() y SupabaseManager.SyncProgressRoutine().
+-- ══════════════════════════════════════════════════════════════════════════════
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS max_unlocked_level INT DEFAULT 0;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS levels_completed   INT DEFAULT 0;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS times_played       INT DEFAULT 0;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS total_stars        INT DEFAULT 0;
+
+-- ══════════════════════════════════════════════════════════════════════════════
 --  TABLA: leaderboard (ranking global, soporta usuarios anon y autenticados)
 -- ══════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS leaderboard (

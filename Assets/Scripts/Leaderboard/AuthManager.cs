@@ -494,7 +494,4 @@ namespace Celeris.Leaderboard
         private string EscapeJson(string s) =>
             s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "").Replace("\r", "");
     }
-
-
-    // Acción en AuthManager.cs: Localiza el método CreateAuthRequest(...). Justo antes del return req;, asigna un límite de tiempo a la petición HTTP añadiendo la propiedad req.timeout = 10; (el valor es en segundos).
 }
